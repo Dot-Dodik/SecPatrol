@@ -1,0 +1,1 @@
+<resources><style name="Theme.SecPatrol" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#0B57D0</item></style></resources>

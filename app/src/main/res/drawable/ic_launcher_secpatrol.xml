@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Background Bulat Warna Cyprus -->
+    <path
+        android:fillColor="#004741"
+        android:pathData="M54,4 C26.39,4 4,26.39 4,54 C4,81.61 26.39,104 54,104 C81.61,104 104,81.61 104,54 C104,26.39 81.61,4 54,4 Z" />
+
+    <!-- Aksen Lingkaran Dalam Warna Sand -->
+    <path
+        android:strokeColor="#F0EDE4"
+        android:strokeWidth="2"
+        android:pathData="M54,12 C30.8,12 12,30.8 12,54 C12,77.2 30.8,96 54,96 C77.2,96 96,77.2 96,54 C96,30.8 77.2,12 54,12 Z" />
+
+    <!-- Lambang Perisai Keamanan (Shield) Warna Sand -->
+    <path
+        android:fillColor="#F0EDE4"
+        android:pathData="M54,26 L32,36 L32,54 C32,68.5 41.4,81.8 54,85 C66.6,81.8 76,68.5 76,54 L76,36 L54,26 Z" />
+
+    <!-- Aksen Tengah Perisai Warna Cyprus -->
+    <path
+        android:fillColor="#004741"
+        android:pathData="M54,34 L54,77 C62.5,74.2 68.8,64.2 69,54 L69,40.5 L54,34 Z" />
+
+    <!-- Tanda Bintang / Badge Patroli -->
+    <path
+        android:fillColor="#004741"
+        android:pathData="M43,48 L46,55 L53,55 L47,59 L49,66 L43,62 L37,66 L39,59 L33,55 L40,55 Z" />
+</vector>
