@@ -79,7 +79,6 @@ fun HomeScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. KARTU SERAH-TERIMA SHIFT & TOMBOL BUKA/TUTUP KUNCI DEV
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
@@ -137,7 +136,7 @@ fun HomeScreen(
                 }
 
                 if (isDevMode) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
                     Text("KONTROL PENGUJI (DEV MODE):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
@@ -178,7 +177,6 @@ fun HomeScreen(
             }
         }
 
-        // 2. KARTU OPERASIONAL PATROLI
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
@@ -238,7 +236,6 @@ fun HomeScreen(
             }
         }
 
-        // 3. KARTU ARSIP & ANTREAN
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
