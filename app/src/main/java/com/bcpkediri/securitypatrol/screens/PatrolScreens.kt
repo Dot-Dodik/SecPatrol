@@ -149,9 +149,9 @@ private fun applyStandardTimemarkWithMinimap(
             style = Paint.Style.FILL
         }
         val coneRadius = mapSize * 0.42f
-        valconeOval = RectF(cx - coneRadius, cy - coneRadius, cx + coneRadius, cy + coneRadius)
+        val coneOval = RectF(cx - coneRadius, cy - coneRadius, cx + coneRadius, cy + coneRadius)
         val startAngle = (LocationUtil.currentAzimuth - 90f - 30f)
-        canvas.drawArc(valconeOval, startAngle, 60f, true, conePaint)
+        canvas.drawArc(coneOval, startAngle, 60f, true, conePaint)
 
         val whiteDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE }
         val blueDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(25, 118, 210) }
