@@ -207,7 +207,18 @@ fun SecPatrolApp() {
                     officerShift = officerShift,
                     isHandoverDone = isHandoverDone,
                     isDevMode = isDevMode,
-                    onShowQr = { navigateProtected(AppScreen.SHOW_QR) },
+                    onShowQr = {
+                        activeHandover = Handover(
+                            id = "HO-${System.currentTimeMillis()}",
+                            giver = officerName,
+                            receiver = "",
+                            oldShift = officerShift,
+                            newShift = "",
+                            area = headerBranch,
+                            created = System.currentTimeMillis()
+                        )
+                        navigateProtected(AppScreen.SHOW_QR)
+                    },
                     onScanQr = { navigateProtected(AppScreen.SCAN_QR) },
                     onDirectSelfieDev = {
                         activeHandover = Handover(
@@ -239,28 +250,33 @@ fun SecPatrolApp() {
                         currentScreen = AppScreen.LOGIN
                     }
                 )
-                AppScreen.SHOW_QR -> ShowQrScreen(
-                    officerName = officerName,
-                    currentShift = officerShift,
-                    branchName = headerBranch,
-                    onBack = { currentScreen = AppScreen.HOME },
-                    onQrScannedSuccess = {
-                        spUser.edit().putBoolean("is_handover_done", false).commit()
-                        isHandoverDone = false
-                        Toast.makeText(context, "Serah-terima selesai! Shift Anda telah berakhir.", Toast.LENGTH_LONG).show()
-                        currentScreen = AppScreen.HOME
-                    }
-                )
+                AppScreen.SHOW_QR -> {
+                    val ho = activeHandover ?: Handover(
+                        id = "HO-${System.currentTimeMillis()}",
+                        giver = officerName,
+                        receiver = "",
+                        oldShift = officerShift,
+                        newShift = "",
+                        area = headerBranch,
+                        created = System.currentTimeMillis()
+                    )
+                    ShowQrScreen(
+                        h = ho,
+                        onDone = {
+                            spUser.edit().putBoolean("is_handover_done", false).commit()
+                            isHandoverDone = false
+                            currentScreen = AppScreen.HOME
+                        }
+                    )
+                }
                 AppScreen.SCAN_QR -> ScanQrScreen(
-                    receiverName = officerName,
                     onScanned = { ho ->
                         activeHandover = ho
                         currentScreen = AppScreen.SELFIE
                     },
-                    onSoloHandover = {
-                        spUser.edit().putBoolean("is_handover_done", true).commit()
-                        isHandoverDone = true
-                        currentScreen = AppScreen.HOME
+                    onSoloHandover = { ho ->
+                        activeHandover = ho
+                        currentScreen = AppScreen.SELFIE
                     },
                     onBack = { currentScreen = AppScreen.HOME }
                 )
