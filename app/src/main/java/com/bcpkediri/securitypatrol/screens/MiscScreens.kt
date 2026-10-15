@@ -25,10 +25,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+
+private val syncMutex = Mutex()
 
 @Composable
 fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
@@ -40,15 +43,11 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
     var passwordInput by remember { mutableStateOf("") }
     var branchInput by remember { mutableStateOf(spUser.getString("officer_branch", "") ?: "") }
     var passwordVisible by remember { mutableStateOf(false) }
-
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -58,21 +57,9 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
             elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Text(
-                    "Autentikasi Petugas Security",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = ColorCyprus
-                )
-                Text(
-                    "Silakan masukkan Username / NIP dan Password yang telah didaftarkan oleh Admin di database.",
-                    fontSize = 12.sp,
-                    color = ColorTextMuted
-                )
+            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Autentikasi Petugas Security", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorCyprus)
+                Text("Masukkan Username / NIP dan Password yang terdaftar di database.", fontSize = 12.sp, color = ColorTextMuted)
 
                 OutlinedTextField(
                     value = usernameInput,
@@ -81,7 +68,6 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                         errorMessage = ""
                     },
                     label = { Text("Username / NIP Petugas *") },
-                    placeholder = { Text("Masukkan NIP Anda") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -94,7 +80,6 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                         errorMessage = ""
                     },
                     label = { Text("Password *") },
-                    placeholder = { Text("Masukkan Password") },
                     singleLine = true,
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -104,23 +89,18 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = ColorCyprus,
-                            modifier = Modifier
-                                .clickable { passwordVisible = !passwordVisible }
-                                .padding(end = 12.dp)
+                            modifier = Modifier.clickable { passwordVisible = !passwordVisible }.padding(end = 12.dp)
                         )
                     },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // MENU TAMBAHAN CABANG DI BAWAH PASSWORD
                 OutlinedTextField(
                     value = branchInput,
-                    onValueChange = {
-                        branchInput = formatTitleCase(it)
-                    },
+                    onValueChange = { branchInput = formatTitleCase(it) },
                     label = { Text("Cabang Pos (Opsional)") },
-                    placeholder = { Text("Contoh: Kediri atau Cabang Kediri") },
+                    placeholder = { Text("Contoh: Kediri atau Madiun") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -128,12 +108,7 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                 )
 
                 if (errorMessage.isNotEmpty()) {
-                    Text(
-                        text = errorMessage,
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Text(errorMessage, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
 
                 Button(
@@ -142,9 +117,7 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                             errorMessage = "Username dan Password wajib diisi!"
                             return@Button
                         }
-
                         val formattedBranch = branchInput.trim()
-
                         isLoading = true
                         errorMessage = ""
                         scope.launch {
@@ -153,13 +126,14 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
                             if (result.first && result.third != null) {
                                 val officerName = result.third!!.first
                                 val officerShift = result.third!!.second
+                                val isAdminDev = usernameInput.equals("ADMIN-DEV", ignoreCase = true)
 
                                 spUser.edit()
                                     .putString("officer_id", usernameInput)
                                     .putString("officer_name", officerName)
                                     .putString("officer_shift", officerShift)
                                     .putString("officer_branch", formattedBranch)
-                                    .putBoolean("is_dev_mode", false)
+                                    .putBoolean("is_dev_mode", isAdminDev)
                                     .putBoolean("is_handover_done", false)
                                     .commit()
 
@@ -186,10 +160,9 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
-    val spConfig = remember { context.getSharedPreferences("secpatrol_config", Context.MODE_PRIVATE) }
+    val spSettings = remember { context.getSharedPreferences("secpatrol_settings", Context.MODE_PRIVATE) }
 
-    // DIBUAT KOSONG SECARA DEFAULT (Hanya terisi jika pernah diketik manual)
-    var endpointInput by remember { mutableStateOf(spConfig.getString("apps_script_url", "") ?: "") }
+    var endpointInput by remember { mutableStateOf(spSettings.getString("endpoint_url", "") ?: "") }
     var branchInput by remember { mutableStateOf(spUser.getString("officer_branch", "") ?: "") }
     var testResult by remember { mutableStateOf("") }
     var isTesting by remember { mutableStateOf(false) }
@@ -202,12 +175,11 @@ fun SettingsScreen(onBack: () -> Unit) {
         Text("Pengaturan Sistem", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-
                 Text("NAMA CABANG POS (HEADER APLIKASI):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
                 OutlinedTextField(
                     value = branchInput,
                     onValueChange = { branchInput = formatTitleCase(it) },
-                    placeholder = { Text("Contoh: Kediri atau Cabang Kediri (Kosongkan = Default)") },
+                    placeholder = { Text("Contoh: Kediri atau Madiun") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words)
@@ -225,11 +197,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
                 )
-                Text(
-                    text = "Catatan: Jika dikosongkan, aplikasi otomatis menggunakan server default utama yang sudah terpasang.",
-                    fontSize = 11.sp,
-                    color = ColorTextMuted
-                )
 
                 if (testResult.isNotBlank()) {
                     Text(
@@ -244,41 +211,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Button(
                         onClick = {
                             isTesting = true
-                            testResult = "Menguji respon endpoint Google Apps Script..."
+                            testResult = "Menguji respon endpoint..."
                             scope.launch {
-                                // Jika input kosong, otomatis tes URL default sistem
                                 val urlToTest = endpointInput.ifBlank { Uploader.getEndpointUrl(context) }
                                 val res = Uploader.testEndpoint(urlToTest)
                                 isTesting = false
-                                testResult = if (endpointInput.isBlank()) {
-                                    "${res.second} (Menggunakan Server Default)"
-                                } else {
-                                    res.second
-                                }
+                                testResult = res.second
                             }
                         },
                         enabled = !isTesting,
                         colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Text(if (isTesting) "Menguji..." else "Tes Koneksi")
-                    }
+                    ) { Text(if (isTesting) "Menguji..." else "Tes Koneksi") }
 
                     Button(
                         onClick = {
-                            // Simpan custom URL jika diisi, atau kosongkan jika ingin pakai default sistem
                             Uploader.setEndpointUrl(context, endpointInput.trim())
                             spUser.edit().putString("officer_branch", branchInput.trim()).commit()
-                            Toast.makeText(context, "Pengaturan Cabang & URL disimpan!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Pengaturan disimpan!", Toast.LENGTH_SHORT).show()
                             onBack()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Simpan")
-                    }
+                    ) { Text("Simpan") }
                 }
             }
         }
@@ -311,20 +268,19 @@ fun OfflineQueueScreen(onBack: () -> Unit) {
             if (pendingList.isNotEmpty()) {
                 Button(
                     onClick = {
+                        if (isUploadingAll) return@Button
                         isUploadingAll = true
                         scope.launch {
                             syncPendingOfflineQueue(context)
                             pendingList = loadPendingItems()
                             isUploadingAll = false
-                            Toast.makeText(context, "Sinkronisasi antrean selesai!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Sinkronisasi selesai!", Toast.LENGTH_SHORT).show()
                         }
                     },
                     enabled = !isUploadingAll,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
                     shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(if (isUploadingAll) "Mengunggah..." else "Upload Semua")
-                }
+                ) { Text(if (isUploadingAll) "Mengunggah..." else "Upload Semua") }
             }
         }
 
@@ -335,10 +291,7 @@ fun OfflineQueueScreen(onBack: () -> Unit) {
         } else {
             LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(pendingList) { item ->
-                    val itemTitle = item.optString("title")
-                        .ifBlank { item.optString("type") }
-                        .ifBlank { item.optString("checkpoint", "Laporan") }
-
+                    val itemTitle = item.optString("title").ifBlank { item.optString("type", "Laporan") }
                     Card(shape = RoundedCornerShape(10.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight), modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(itemTitle, fontWeight = FontWeight.Bold, color = ColorCyprus, fontSize = 14.sp)
@@ -349,7 +302,6 @@ fun OfflineQueueScreen(onBack: () -> Unit) {
                 }
             }
         }
-
         OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Kembali ke Beranda") }
     }
 }
@@ -378,6 +330,7 @@ fun GalleryReadOnlyScreen(onBack: () -> Unit) {
             Text("Arsip Verifikasi Patroli", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
             Button(
                 onClick = {
+                    if (isSyncing) return@Button
                     isSyncing = true
                     scope.launch {
                         syncPendingOfflineQueue(context)
@@ -389,9 +342,7 @@ fun GalleryReadOnlyScreen(onBack: () -> Unit) {
                 enabled = !isSyncing,
                 colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
                 shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(if (isSyncing) "Syncing..." else "Sync Cloud")
-            }
+            ) { Text(if (isSyncing) "Syncing..." else "Sync Cloud") }
         }
 
         if (logList.isEmpty()) {
@@ -401,39 +352,41 @@ fun GalleryReadOnlyScreen(onBack: () -> Unit) {
         } else {
             LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(logList) { item ->
+                    val statusStr = item.optString("status", "-")
+                    val isUploaded = statusStr.contains("CLOUD", ignoreCase = true)
                     Card(shape = RoundedCornerShape(10.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight), modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(item.optString("title", "Patroli"), fontWeight = FontWeight.Bold, fontSize = 13.sp, color = ColorCyprus)
                             Text("Waktu: ${item.optString("timestamp", "-")}", fontSize = 11.sp, color = ColorTextMuted)
-                            Text("Status: ${item.optString("status", "-")}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (item.optString("status").contains("CLOUD")) Color(0xFF2E7D32) else Color(0xFFD97706))
+                            Text("Status: $statusStr", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isUploaded) Color(0xFF2E7D32) else Color(0xFFD97706))
                         }
                     }
                 }
             }
         }
-
         OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Kembali ke Beranda") }
     }
 }
 
-// SINKRONISASI CERDAS: DETEKSI OTOMATIS NAMA POS & ALAMAT GEOTAG
 suspend fun syncPendingOfflineQueue(context: Context) = withContext(Dispatchers.IO) {
-    val spQueue = context.getSharedPreferences("offline_reports_queue", Context.MODE_PRIVATE)
-    val raw = spQueue.getString("pending_list", "[]") ?: "[]"
-    if (raw == "[]" || raw.isBlank()) return@withContext
+    if (!LocationUtil.checkNetworkAvailable(context)) return@withContext
+    if (!syncMutex.tryLock()) return@withContext
 
     try {
+        val spQueue = context.getSharedPreferences("offline_reports_queue", Context.MODE_PRIVATE)
+        val raw = spQueue.getString("pending_list", "[]") ?: "[]"
+        if (raw == "[]" || raw.isBlank()) return@withContext
+
         val arr = JSONArray(raw)
-        val remaining = JSONArray()
-        val uploader = Uploader
+        val items = mutableListOf<JSONObject>()
+        for (i in 0 until arr.length()) items.add(arr.getJSONObject(i))
 
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            val rawType = o.optString("title")
-                .ifBlank { o.optString("type") }
-                .ifBlank { o.optString("checkpoint") }
-                .ifBlank { o.optString("name", "") }
+        val remaining = mutableListOf<JSONObject>()
+        val fallbackArea = LocationUtil.getFallbackPatrolArea(context)
 
+        for (index in items.indices) {
+            val o = items[index]
+            val rawType = o.optString("title").ifBlank { o.optString("type") }.ifBlank { o.optString("checkpoint", "Pos 1") }
             val officer = o.optString("officer", "-")
             val note = o.optString("note", "-")
             val coords = o.optString("coords", "-")
@@ -442,91 +395,68 @@ suspend fun syncPendingOfflineQueue(context: Context) = withContext(Dispatchers.
 
             if (!file.exists()) continue
 
-            val posFromFile = if (file.name.contains("Pos_", ignoreCase = true)) {
-                val match = Regex("Pos_\\d+", RegexOption.IGNORE_CASE).find(file.name)?.value
-                match?.replace("_", " ") ?: ""
-            } else ""
-
-            val posFromNote = if (note.contains("pos", ignoreCase = true)) {
-                val match = Regex("pos\\s*\\d+", RegexOption.IGNORE_CASE).find(note)?.value
-                match?.split(" ")?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } } ?: ""
-            } else ""
-
-            val type = when {
-                rawType.isNotBlank() && rawType != "Titik Patroli" && rawType != "Laporan" -> rawType
-                posFromFile.isNotBlank() -> posFromFile
-                posFromNote.isNotBlank() -> posFromNote
-                else -> rawType.ifBlank { "Pos 1" }
-            }
-
-            var address = o.optString("address", "").ifBlank { o.optString("geotag", "") }
-            if (address.isBlank() || address == "-") {
-                try {
-                    val cleanCoords = coords.replace("°S", "").replace("°E", "").replace("S", "").replace("E", "")
-                    val parts = cleanCoords.split(",")
+            var address = o.optString("address", "")
+            if (address.isBlank() || address == "-" || address.contains("Jalan Mauni", ignoreCase = true)) {
+                address = try {
+                    val parts = coords.replace("°S", "").replace("°E", "").split(",")
                     if (parts.size == 2) {
-                        val lat = parts[0].trim().toDouble()
-                        val lon = parts[1].trim().toDouble()
-                        address = LocationUtil.resolveAddress(context, lat, lon)
-                    }
-                } catch (_: Exception) {
-                    address = "Jalan Mauni, Kecamatan Pesantren, Kota Kediri"
-                }
+                        LocationUtil.resolveAddress(context, parts[0].trim().toDouble(), parts[1].trim().toDouble())
+                    } else fallbackArea
+                } catch (_: Exception) { fallbackArea }
             }
 
-            val isHandover = type.contains("Serah", ignoreCase = true) ||
-                             note.contains("Serah-terima", ignoreCase = true) ||
-                             note.contains("Shift", ignoreCase = true)
-
-            val isTruck = type.contains("Truck", ignoreCase = true) ||
-                          note.contains("Truck", ignoreCase = true) ||
-                          note.contains("Bongkar", ignoreCase = true)
-
-            val isGenset = type.contains("Genset", ignoreCase = true)
-
-            val isFacility = type.contains("Gudang", ignoreCase = true) ||
-                             type.contains("Parkir", ignoreCase = true) ||
-                             type.contains("Ruang", ignoreCase = true) ||
-                             type.contains("Pintu", ignoreCase = true) ||
-                             type.contains("Gembok", ignoreCase = true) ||
-                             type.contains("Area", ignoreCase = true) ||
-                             type.contains("Fasilitas", ignoreCase = true)
+            val isHandover = rawType.contains("Serah", true) || note.contains("Serah-terima", true)
+            val isTruck = rawType.contains("Truck", true) || note.contains("Bongkar", true)
+            val isGenset = rawType.contains("Genset", true)
+            val isVideo = file.name.endsWith(".mp4", true) || rawType.contains("Video", true)
+            val isFacility = rawType.contains("Gudang", true) || rawType.contains("Parkir", true) ||
+                             rawType.contains("Ruang", true) || rawType.contains("Pintu", true) ||
+                             rawType.contains("Gembok", true) || rawType.contains("Fasilitas", true)
 
             val success = when {
                 isHandover -> {
                     val ho = Handover(
-                        id = "HO-${System.currentTimeMillis()}",
+                        id = "HO-${file.lastModified()}",
                         giver = officer,
                         receiver = officer,
                         oldShift = note.substringAfter("Serah-terima ").substringBefore(" ke ").ifBlank { "Shift Lama" },
                         newShift = note.substringAfter("ke ").ifBlank { "Shift Baru" },
-                        area = "Gudang BCP Kediri",
-                        created = System.currentTimeMillis()
+                        area = fallbackArea,
+                        created = file.lastModified()
                     )
-                    uploader.send(context, ho, file, 1).first
+                    Uploader.send(context, ho, file, 1).first
                 }
                 isTruck -> {
-                    val nopol = if (type.contains("Truck ")) type.substringAfter("Truck ").substringBefore(" [") else "TRUCK"
-                    uploader.sendInbound(context, nopol, "-", "-", "-", "-", "-", "-", "Tersinkron", officer, note, coords, listOf(file)).first
+                    val nopol = if (rawType.contains("Truck ")) rawType.substringAfter("Truck ").substringBefore(" [").trim() else "TRUCK"
+                    val parsedDriver = note.substringBefore(" (").ifBlank { officer }
+                    val parsedStatus = when {
+                        rawType.contains("Selesai", true) -> "Truck Selesai Muat (Kosong & Bersih)"
+                        rawType.contains("Sedang Bongkar", true) -> "Truck Sedang Bongkar Muat"
+                        else -> "Truck Datang - Antri Bongkar"
+                    }
+                    Uploader.sendInbound(context, nopol, parsedDriver, "-", "-", "-", "-", "-", parsedStatus, officer, note, coords, listOf(file)).first
                 }
-                isGenset -> {
-                    uploader.sendGensetCheck(context, "Tersinkron", "Normal", "Normal", officer, note, address.ifBlank { "-" }, coords, file, null, null).first
-                }
-                isFacility -> {
-                    uploader.sendFacilityMulti(context, type.ifBlank { "Area Parkir / Sekeliling" }, officer, note, address.ifBlank { "Jalan Mauni, Kecamatan Pesantren, Kota Kediri" }, coords, listOf(file)).first
-                }
-                else -> {
-                    uploader.sendCheckpoint(context, type, officer, note, address.ifBlank { "Jalan Mauni, Kecamatan Pesantren, Kota Kediri" }, coords, file).first
-                }
+                isGenset -> Uploader.sendGensetCheck(context, "Tersinkron", "Normal", "Normal", officer, note, address, coords, file, null, null).first
+                isVideo -> Uploader.sendVideoPatrol(context, rawType, officer, note, coords, file).first
+                isFacility -> Uploader.sendFacilityMulti(context, rawType, officer, note, address, coords, listOf(file)).first
+                else -> Uploader.sendCheckpoint(context, rawType, officer, note, address, coords, file).first
             }
 
             if (!success) {
-                remaining.put(o)
+                remaining.add(o)
             } else {
-                MediaStorageUtil.recordVerificationLog(context, type, file.name, "TERUPLOAD KE CLOUD (SYNC)", coords)
+                MediaStorageUtil.recordVerificationLog(context, rawType, file.name, "TERUPLOAD KE CLOUD (SYNC)", coords)
             }
-        }
 
-        spQueue.edit().putString("pending_list", remaining.toString()).commit()
-    } catch (_: Exception) {}
+            val currentPendingJson = JSONArray()
+            remaining.forEach { currentPendingJson.put(it) }
+            for (remIdx in (index + 1) until items.size) {
+                currentPendingJson.put(items[remIdx])
+            }
+            spQueue.edit().putString("pending_list", currentPendingJson.toString()).commit()
+        }
+    } catch (_: Exception) {
+    } finally {
+        syncMutex.unlock()
+    }
 }
