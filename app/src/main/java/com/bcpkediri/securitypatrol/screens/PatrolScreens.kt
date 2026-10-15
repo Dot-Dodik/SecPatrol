@@ -7,7 +7,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +35,30 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+
+data class InboundQueueItem(
+    val nopol: String,
+    val driverName: String,
+    val driverPhone: String,
+    val division: String,
+    val vehicleType: String,
+    val expedition: String,
+    val sealNo: String,
+    val status: String
+)
+
+fun formatTitleCase(input: String): String {
+    if (input.isBlank()) return ""
+    return input.split(" ").joinToString(" ") { word ->
+        if (word.isNotEmpty()) {
+            word.lowercase(Locale.getDefault()).replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
+            }
+        } else {
+            ""
+        }
+    }
+}
 
 private fun applyPatrolWatermark(
     context: Context,
@@ -411,7 +434,7 @@ fun InboundTruckReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
     var gpsStatusText by remember { mutableStateOf("Mencari koordinat satelit...") }
     var coordsRaw by remember { mutableStateOf("-") }
 
-    var queueList by remember { mutableStateOf(listOf<InboundQueueItem>()) }
+    var queueList by remember { mutableStateOf<List<InboundQueueItem>>(emptyList()) }
     var dropdownExpanded by remember { mutableStateOf(false) }
     var selectedQueueLabel by remember { mutableStateOf("Belum ada antrean (Ketik Truk Baru)") }
     var isSyncingQueue by remember { mutableStateOf(false) }
@@ -749,10 +772,14 @@ fun InboundTruckReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                         val title = "Truck $cleanNopol [$selectedStatus]"
                         val combinedNote = "${driverNameInput.trim()} (${driverPhoneInput.ifBlank { "-" }}) - ${noteInput.ifBlank { selectedStatus }}"
 
-                        val current = queueList.toMutableList()
-                        current.removeAll { it.nopol.equals(cleanNopol, ignoreCase = true) }
+                        val updatedQueue = mutableListOf<InboundQueueItem>()
+                        queueList.forEach { item ->
+                            if (!item.nopol.equals(cleanNopol, ignoreCase = true)) {
+                                updatedQueue.add(item)
+                            }
+                        }
                         if (!selectedStatus.contains("Selesai", ignoreCase = true)) {
-                            current.add(
+                            updatedQueue.add(
                                 InboundQueueItem(
                                     nopol = cleanNopol,
                                     driverName = driverNameInput.trim(),
@@ -765,7 +792,7 @@ fun InboundTruckReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                                 )
                             )
                         }
-                        saveLocalQueue(current)
+                        saveLocalQueue(updatedQueue)
 
                         val res = Uploader.sendInbound(
                             context = context,
