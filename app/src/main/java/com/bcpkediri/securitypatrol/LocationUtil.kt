@@ -11,26 +11,33 @@ import android.hardware.SensorManager
 import android.location.*
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
-// VARIABEL TOP-LEVEL: Kompatibilitas jika dipanggil langsung tanpa prefix LocationUtil
 var currentAzimuth: Float
     get() = LocationUtil.currentAzimuth
     set(value) { LocationUtil.currentAzimuth = value }
 
 object LocationUtil : SensorEventListener {
 
-    // VARIABEL AZIMUTH / SUDUT KOMPAS (UNTUK WATERMARK RADAR CONE)
     var currentAzimuth: Float = 0f
-
     private var sensorManager: SensorManager? = null
     private var gravity: FloatArray? = null
     private var geomagnetic: FloatArray? = null
+
+    fun getFallbackPatrolArea(context: Context): String {
+        val spUser = context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
+        val branch = (spUser.getString("officer_branch", "") ?: "").trim()
+        return if (branch.isNotBlank()) {
+            val cleanBranch = if (branch.startsWith("Cabang", ignoreCase = true)) branch else "Cabang $branch"
+            "Area Patroli Security ($cleanBranch)"
+        } else {
+            "Area Patroli Security"
+        }
+    }
 
     fun checkNetworkAvailable(context: Context): Boolean {
         return try {
@@ -49,19 +56,15 @@ object LocationUtil : SensorEventListener {
         return fine || coarse
     }
 
-    // CEK APAKAH GPS FISIK DIAKTIFKAN DI HP
     fun isGpsEnabled(context: Context): Boolean {
         return try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
-            val isGps = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
-            val isNet = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-            isGps || isNet
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
         } catch (_: Exception) {
             false
         }
     }
 
-    // BUKA PENGATURAN GPS JIKA LAYANAN LOKASI MATI
     fun openLocationSettings(context: Context) {
         try {
             val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
@@ -71,23 +74,27 @@ object LocationUtil : SensorEventListener {
         } catch (_: Exception) {}
     }
 
-    // AKTIFKAN SENSOR KOMPAS PERANGKAT
     fun startCompass(context: Context) {
         try {
             if (sensorManager == null) {
                 sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
             }
             sensorManager?.let { sm ->
+                sm.unregisterListener(this)
                 val rotSensor = sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
                 if (rotSensor != null) {
                     sm.registerListener(this, rotSensor, SensorManager.SENSOR_DELAY_UI)
                 } else {
-                    val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-                    val mag = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-                    accel?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-                    mag?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+                    sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+                    sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
                 }
             }
+        } catch (_: Exception) {}
+    }
+
+    fun stopCompass() {
+        try {
+            sensorManager?.unregisterListener(this)
         } catch (_: Exception) {}
     }
 
@@ -99,8 +106,7 @@ object LocationUtil : SensorEventListener {
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(rotationMatrix, orientation)
-                val azimuthRad = orientation[0]
-                var azimuthDeg = Math.toDegrees(azimuthRad.toDouble()).toFloat()
+                var azimuthDeg = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 if (azimuthDeg < 0) azimuthDeg += 360f
                 currentAzimuth = azimuthDeg
             } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
@@ -129,15 +135,12 @@ object LocationUtil : SensorEventListener {
         context: Context,
         onLocationResult: (locText: String, coordsRaw: String, location: Location?) -> Unit
     ) {
-        // Otomatis nyalakan sensor kompas saat pelacakan GPS dimulai
         startCompass(context)
-
         try {
             if (!isLocationPermissionGranted(context)) {
                 onLocationResult("Izin GPS belum diaktifkan", "-", null)
                 return
             }
-
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             if (lm == null) {
                 onLocationResult("Sensor GPS tidak tersedia", "-", null)
@@ -146,7 +149,6 @@ object LocationUtil : SensorEventListener {
 
             val isGps = try { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) } catch (_: Exception) { false }
             val isNet = try { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { false }
-
             if (!isGps && !isNet) {
                 onLocationResult("Layanan Lokasi (GPS) Dimatikan", "-", null)
                 return
@@ -162,8 +164,7 @@ object LocationUtil : SensorEventListener {
 
             if (lastKnown != null) {
                 val coords = String.format(Locale.US, "%.6f, %.6f", lastKnown.latitude, lastKnown.longitude)
-                val text = "GPS Satelit: $coords (Akurasi: ±${lastKnown.accuracy.toInt()}m)"
-                onLocationResult(text, coords, lastKnown)
+                onLocationResult("GPS Satelit: $coords (Akurasi: ±${lastKnown.accuracy.toInt()}m)", coords, lastKnown)
             } else {
                 onLocationResult("Mencari koordinat satelit...", "-", null)
             }
@@ -172,8 +173,7 @@ object LocationUtil : SensorEventListener {
                 override fun onLocationChanged(loc: Location) {
                     try {
                         val coords = String.format(Locale.US, "%.6f, %.6f", loc.latitude, loc.longitude)
-                        val text = "GPS Satelit: $coords (Akurasi: ±${loc.accuracy.toInt()}m)"
-                        onLocationResult(text, coords, loc)
+                        onLocationResult("GPS Satelit: $coords (Akurasi: ±${loc.accuracy.toInt()}m)", coords, loc)
                         lm.removeUpdates(this)
                     } catch (_: Exception) {}
                 }
@@ -185,13 +185,9 @@ object LocationUtil : SensorEventListener {
             }
 
             if (isGps) {
-                try {
-                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000L, 1f, listener, Looper.getMainLooper())
-                } catch (_: Exception) {}
+                try { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000L, 1f, listener, Looper.getMainLooper()) } catch (_: Exception) {}
             } else if (isNet) {
-                try {
-                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 1f, listener, Looper.getMainLooper())
-                } catch (_: Exception) {}
+                try { lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 1f, listener, Looper.getMainLooper()) } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             onLocationResult("GPS Error: ${e.message ?: "Tidak terdeteksi"}", "-", null)
@@ -199,28 +195,27 @@ object LocationUtil : SensorEventListener {
     }
 
     suspend fun resolveAddress(context: Context, latitude: Double, longitude: Double): String {
+        val fallbackArea = getFallbackPatrolArea(context)
+        if (!checkNetworkAvailable(context)) {
+            return fallbackArea
+        }
         return try {
             val geocoder = Geocoder(context, Locale("id", "ID"))
-            val addresses: List<Address>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                geocoder.getFromLocation(latitude, longitude, 1)
-            } else {
-                @Suppress("DEPRECATION")
-                geocoder.getFromLocation(latitude, longitude, 1)
-            }
-
+            @Suppress("DEPRECATION")
+            val addresses: List<Address>? = geocoder.getFromLocation(latitude, longitude, 1)
             if (!addresses.isNullOrEmpty()) {
                 val addr = addresses[0]
                 val thoroughfare = addr.thoroughfare ?: addr.subLocality ?: ""
                 val locality = addr.locality ?: addr.subAdminArea ?: ""
                 val adminArea = addr.adminArea ?: ""
                 listOf(thoroughfare, locality, adminArea).filter { it.isNotBlank() }.joinToString(", ").ifBlank {
-                    addr.getAddressLine(0) ?: "Jalan Mauni, Kecamatan Pesantren, Kota Kediri"
+                    addr.getAddressLine(0) ?: fallbackArea
                 }
             } else {
-                "Jalan Mauni, Kecamatan Pesantren, Kota Kediri"
+                fallbackArea
             }
         } catch (_: Exception) {
-            "Jalan Mauni, Kecamatan Pesantren, Kota Kediri"
+            fallbackArea
         }
     }
 }
