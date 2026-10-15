@@ -2,7 +2,7 @@ package com.bcpkediri.securitypatrol
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.BitmapFactory
+import android.graphics.*
 import android.net.Uri
 import android.util.Size
 import android.widget.Toast
@@ -14,7 +14,6 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -47,8 +46,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
+import kotlin.math.*
 
 data class InboundQueueItem(
     val nopol: String,
@@ -72,8 +75,35 @@ fun formatTitleCase(input: String): String {
     }
 }
 
+private fun fetchSatelliteMinimapTile(coordsText: String): Bitmap? {
+    return try {
+        val clean = coordsText.replace("°S", "").replace("°E", "").replace("S", "").replace("E", "")
+        val parts = clean.split(",")
+        if (parts.size != 2) return null
+        val lat = parts[0].trim().toDouble()
+        val lon = parts[1].trim().toDouble()
+        val zoom = 18
+        val n = 2.0.pow(zoom.toDouble())
+        val xTile = ((lon + 180.0) / 360.0 * n).toInt()
+        val latRad = Math.toRadians(lat)
+        val yTile = ((1.0 - ln(tan(latRad) + 1.0 / cos(latRad)) / PI) / 2.0 * n).toInt()
+
+        val tileUrl = "https://mt1.google.com/vt/lyrs=s&x=$xTile&y=$yTile&z=$zoom"
+        val conn = (URL(tileUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 4000
+            readTimeout = 4000
+            setRequestProperty("User-Agent", "Mozilla/5.0")
+        }
+        if (conn.responseCode == 200) {
+            conn.inputStream.use { BitmapFactory.decodeStream(it) }
+        } else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /**
- * Menerapkan Timemark BORWITA + Minimap Satelit seragam seperti pada foto Selfie
+ * Menggambar Timemark BORWITA Security Patrol + Minimap Satelit + Pita Putih Bawah (100% seragam dengan Selfie)
  */
 private fun applyStandardTimemarkWithMinimap(
     context: Context,
@@ -85,19 +115,133 @@ private fun applyStandardTimemarkWithMinimap(
     bottomBannerText: String
 ) {
     try {
-        WatermarkUtil.applyTimemarkWatermark(
-            file = imageFile,
-            badgeText = badgeLabel,
-            address = addressText,
-            coords = coordsText,
-            officer = officerName,
-            bottomTitle = bottomBannerText,
-            azimuth = LocationUtil.currentAzimuth
-        )
-        val bmp = BitmapFactory.decodeFile(imageFile.absolutePath)
-        if (bmp != null) {
-            MediaStorageUtil.saveImageToPublicGallery(context, bmp, imageFile.name)
+        val original = BitmapFactory.decodeFile(imageFile.absolutePath) ?: return
+        val mutableBmp = original.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(mutableBmp)
+        val w = mutableBmp.width.toFloat()
+        val h = mutableBmp.height.toFloat()
+        val s = (w / 1080f).coerceAtLeast(0.55f)
+
+        // 1. Gambar Minimap Satelit di Pojok Kiri Atas
+        val mapSize = (260f * s).toInt()
+        val mapLeft = 36f * s
+        val mapTop = 36f * s
+        val mapRect = RectF(mapLeft, mapTop, mapLeft + mapSize, mapTop + mapSize)
+
+        val tileBmp = fetchSatelliteMinimapTile(coordsText)
+        val mapBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(35, 55, 50) }
+        canvas.drawRoundRect(mapRect, 24f * s, 24f * s, mapBgPaint)
+
+        if (tileBmp != null) {
+            val scaledTile = Bitmap.createScaledBitmap(tileBmp, mapSize, mapSize, true)
+            val saveCount = canvas.save()
+            val clipPath = Path().apply { addRoundRect(mapRect, 24f * s, 24f * s, Path.Direction.CW) }
+            canvas.clipPath(clipPath)
+            canvas.drawBitmap(scaledTile, mapLeft, mapTop, null)
+            canvas.restoreToCount(saveCount)
         }
+
+        // Kerucut Arah Kompas Hijau + Titik Biru Lokasi
+        val cx = mapRect.centerX()
+        val cy = mapRect.centerY()
+        val conePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(115, 46, 204, 113)
+            style = Paint.Style.FILL
+        }
+        val coneRadius = mapSize * 0.42f
+        valconeOval = RectF(cx - coneRadius, cy - coneRadius, cx + coneRadius, cy + coneRadius)
+        val startAngle = (LocationUtil.currentAzimuth - 90f - 30f)
+        canvas.drawArc(valconeOval, startAngle, 60f, true, conePaint)
+
+        val whiteDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE }
+        val blueDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(25, 118, 210) }
+        canvas.drawCircle(cx, cy, 20f * s, blueDotPaint)
+        canvas.drawCircle(cx, cy, 9f * s, whiteDotPaint)
+
+        val mapBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 3f * s
+        }
+        canvas.drawRoundRect(mapRect, 24f * s, 24f * s, mapBorderPaint)
+
+        val googlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 26f * s
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+        }
+        canvas.drawText("Google", mapLeft + 16f * s, mapRect.bottom - 16f * s, googlePaint)
+
+        // 2. Gambar Pita Putih Judul Laporan di Bagian Paling Bawah
+        val bannerHeight = 76f * s
+        val bannerTop = h - bannerHeight - (18f * s)
+        val bannerRect = RectF(36f * s, bannerTop, w - 36f * s, h - 18f * s)
+        val whiteBannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE }
+        canvas.drawRoundRect(bannerRect, 18f * s, 18f * s, whiteBannerPaint)
+
+        val bannerTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.BLACK
+            textSize = 31f * s
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+        }
+        canvas.drawText(bottomBannerText.take(44), 56f * s, bannerRect.centerY() + (11f * s), bannerTextPaint)
+
+        // 3. Gambar Kotak Gelap Transparan BORWITA Security Patrol di Atas Pita Putih
+        val darkBoxHeight = 230f * s
+        val darkBoxTop = bannerTop - darkBoxHeight - (12f * s)
+        val darkBoxRect = RectF(36f * s, darkBoxTop, w - 36f * s, bannerTop - (6f * s))
+        val darkBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(175, 25, 25, 25) }
+        canvas.drawRoundRect(darkBoxRect, 22f * s, 22f * s, darkBgPaint)
+
+        // Bendera Merah Putih
+        val flagLeft = 60f * s
+        val flagTop = darkBoxTop + 26f * s
+        val flagW = 54f * s
+        val flagH = 36f * s
+        val redPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(211, 47, 47) }
+        canvas.drawRect(flagLeft, flagTop, flagLeft + flagW, flagTop + flagH / 2f, redPaint)
+        canvas.drawRect(flagLeft, flagTop + flagH / 2f, flagLeft + flagW, flagTop + flagH, whiteBannerPaint)
+
+        // Teks BORWITA
+        val borwitaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 32f * s
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText("BORWITA", flagLeft + flagW + 18f * s, flagTop + 29f * s, borwitaPaint)
+
+        // Badge Hijau "Security Patrol"
+        val badgeLeft = flagLeft + flagW + 195f * s
+        val badgeRect = RectF(badgeLeft, flagTop - 2f * s, badgeLeft + 235f * s, flagTop + flagH + 4f * s)
+        val greenBadgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(46, 139, 87) }
+        canvas.drawRoundRect(badgeRect, 10f * s, 10f * s, greenBadgePaint)
+
+        val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 23f * s
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText(badgeLabel.take(16), badgeLeft + 18f * s, flagTop + 26f * s, badgeTextPaint)
+
+        // Detail Alamat, Lat/Long, dan Waktu
+        val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(235, 235, 235)
+            textSize = 25f * s
+        }
+        val dayFormat = SimpleDateFormat("EEEE, dd/MM/yyyy hh:mm a", Locale("id", "ID")).format(Date())
+        var textY = flagTop + flagH + 42f * s
+        canvas.drawText(addressText.take(55), flagLeft, textY, detailPaint)
+        textY += 40f * s
+        canvas.drawText("Lat/Long: $coordsText  •  Petugas: $officerName", flagLeft, textY, detailPaint)
+        textY += 40f * s
+        canvas.drawText(dayFormat, flagLeft, textY, detailPaint)
+
+        FileOutputStream(imageFile).use { out ->
+            mutableBmp.compress(Bitmap.CompressFormat.JPEG, 88, out)
+            out.flush()
+        }
+        MediaStorageUtil.saveImageToPublicGallery(context, mutableBmp, imageFile.name)
     } catch (_: Exception) {}
 }
 
@@ -182,7 +326,6 @@ private fun QrCheckpointScannerBox(
     onQrDetected: (String) -> Unit,
     onCloseScanner: () -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     var hasScanned by remember { mutableStateOf(false) }
@@ -341,7 +484,7 @@ fun CheckpointScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                     applyStandardTimemarkWithMinimap(
                         context = context,
                         imageFile = file,
-                        badgeLabel = "Patroli $selectedCheckpoint",
+                        badgeLabel = "Security Patrol",
                         officerName = officerName,
                         coordsText = coordsRaw,
                         addressText = finalAddress,
@@ -356,7 +499,7 @@ fun CheckpointScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                 } else {
                     MediaStorageUtil.saveToOfflineQueue(context, selectedCheckpoint, officerName, finalNote, coordsRaw, file.absolutePath, finalAddress)
                     MediaStorageUtil.recordVerificationLog(context, selectedCheckpoint, file.name, "TERSIMPAN LOKAL (OFFLINE)", coordsRaw)
-                    Toast.makeText(context, "Gagal kirim ke Server (${res.second}). Disimpan di Antrean Offline.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Gagal kirim (${res.second}). Disimpan di Antrean Offline.", Toast.LENGTH_LONG).show()
                 }
                 onSuccess()
             }
@@ -535,7 +678,7 @@ fun FacilityReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                     applyStandardTimemarkWithMinimap(
                         context = context,
                         imageFile = file,
-                        badgeLabel = "Fasilitas Gudang",
+                        badgeLabel = "Security Patrol",
                         officerName = officerName,
                         coordsText = coordsRaw,
                         addressText = finalAddress,
@@ -773,7 +916,7 @@ fun InboundTruckReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                     applyStandardTimemarkWithMinimap(
                         context = context,
                         imageFile = file,
-                        badgeLabel = "Inbound $cleanNopol",
+                        badgeLabel = "Security Patrol",
                         officerName = officerName,
                         coordsText = coordsRaw,
                         addressText = finalAddress,
@@ -801,7 +944,7 @@ fun InboundTruckReportScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                             applyStandardTimemarkWithMinimap(
                                 context = context,
                                 imageFile = destFile,
-                                badgeLabel = "Inbound $cleanNopol",
+                                badgeLabel = "Security Patrol",
                                 officerName = officerName,
                                 coordsText = coordsRaw,
                                 addressText = finalAddress,
@@ -1170,7 +1313,7 @@ fun GensetCheckScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
                     applyStandardTimemarkWithMinimap(
                         context = context,
                         imageFile = file,
-                        badgeLabel = "Cek Genset",
+                        badgeLabel = "Security Patrol",
                         officerName = officerName,
                         coordsText = coordsRaw,
                         addressText = finalAddress,
