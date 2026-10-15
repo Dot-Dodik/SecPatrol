@@ -253,11 +253,14 @@ fun SecPatrolApp() {
                 )
                 AppScreen.SCAN_QR -> ScanQrScreen(
                     receiverName = officerName,
-                    receiverShift = officerShift,
-                    branchName = headerBranch,
                     onScanned = { ho ->
                         activeHandover = ho
                         currentScreen = AppScreen.SELFIE
+                    },
+                    onSoloHandover = {
+                        spUser.edit().putBoolean("is_handover_done", true).commit()
+                        isHandoverDone = true
+                        currentScreen = AppScreen.HOME
                     },
                     onBack = { currentScreen = AppScreen.HOME }
                 )
@@ -266,25 +269,43 @@ fun SecPatrolApp() {
                     if (ho != null) {
                         SelfieScreen(
                             handover = ho,
-                            isDevMode = isDevMode,
-                            onDone = {
+                            onSuccess = {
                                 spUser.edit().putBoolean("is_handover_done", true).commit()
                                 isHandoverDone = true
                                 currentScreen = AppScreen.HOME
                             },
-                            onCancel = { currentScreen = AppScreen.HOME }
+                            onBack = { currentScreen = AppScreen.HOME }
                         )
                     } else {
                         currentScreen = AppScreen.HOME
                     }
                 }
-                AppScreen.CHECKPOINT -> CheckpointScreen(officerName = officerName, onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.FACILITY_REPORT -> FacilityReportScreen(officerName = officerName, onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.INBOUND_TRUCK -> InboundTruckReportScreen(officerName = officerName, onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.GENSET_CHECK -> GensetCheckScreen(officerName = officerName, onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.VIDEO_PATROL -> VideoPatrolScreen(officerName = officerName, onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.GALLERY -> GalleryReadOnlyScreen(onBack = { currentScreen = AppScreen.HOME })
-                AppScreen.OFFLINE_QUEUE -> OfflineQueueScreen(onBack = { currentScreen = AppScreen.HOME })
+                AppScreen.CHECKPOINT -> CheckpointScreen(
+                    onSuccess = { currentScreen = AppScreen.HOME },
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.FACILITY_REPORT -> FacilityReportScreen(
+                    onSuccess = { currentScreen = AppScreen.HOME },
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.INBOUND_TRUCK -> InboundTruckReportScreen(
+                    onSuccess = { currentScreen = AppScreen.HOME },
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.GENSET_CHECK -> GensetCheckScreen(
+                    onSuccess = { currentScreen = AppScreen.HOME },
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.VIDEO_PATROL -> VideoPatrolScreen(
+                    onSuccess = { currentScreen = AppScreen.HOME },
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.GALLERY -> GalleryReadOnlyScreen(
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
+                AppScreen.OFFLINE_QUEUE -> OfflineQueueScreen(
+                    onBack = { currentScreen = AppScreen.HOME }
+                )
                 AppScreen.SETTINGS -> SettingsScreen(
                     onBack = {
                         refreshUserSession()
