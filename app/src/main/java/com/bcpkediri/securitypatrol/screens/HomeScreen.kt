@@ -37,13 +37,39 @@ fun HomeScreen(
     onLogoutUser: () -> Unit
 ) {
     val context = LocalContext.current
-    val patrolUnlocked = isHandoverDone || isDevMode
+    val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
+    var devBypassUnlock by remember { mutableStateOf(spUser.getBoolean("is_handover_done", isHandoverDone)) }
+    val patrolUnlocked = isHandoverDone || devBypassUnlock
+
+    var showGpsOffDialog by remember { mutableStateOf(!LocationUtil.isGpsEnabled(context)) }
 
     val pendingOfflineCount = remember {
         try {
             val spQueue = context.getSharedPreferences("offline_reports_queue", Context.MODE_PRIVATE)
             JSONArray(spQueue.getString("pending_list", "[]") ?: "[]").length()
         } catch (_: Exception) { 0 }
+    }
+
+    if (showGpsOffDialog) {
+        AlertDialog(
+            onDismissRequest = { showGpsOffDialog = false },
+            title = { Text("⚠️ GPS / Lokasi Mati!", fontWeight = FontWeight.Bold, color = Color(0xFFB71C1C)) },
+            text = {
+                Text("Layanan Lokasi (GPS) di HP Anda sedang dimatikan. Aktifkan GPS sekarang agar koordinat satelit dan Minimap pada foto patroli dapat terekam dengan akurat.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showGpsOffDialog = false
+                        LocationUtil.openLocationSettings(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus)
+                ) { Text("Nyalakan GPS") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGpsOffDialog = false }) { Text("Nanti") }
+            }
+        )
     }
 
     Column(
@@ -53,6 +79,7 @@ fun HomeScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 1. KARTU SERAH-TERIMA SHIFT & TOMBOL BUKA/TUTUP KUNCI DEV
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
@@ -110,21 +137,48 @@ fun HomeScreen(
                 }
 
                 if (isDevMode) {
-                    OutlinedButton(
-                        onClick = onDirectSelfieDev,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Mode Uji Admin: Langsung Selfie Tanpa QR", fontSize = 12.sp, color = ColorCyprus) }
-                }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Text("KONTROL PENGUJI (DEV MODE):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                val nextState = !patrolUnlocked
+                                devBypassUnlock = nextState
+                                spUser.edit().putBoolean("is_handover_done", nextState).commit()
+                                if (!nextState) onResetHandover()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (patrolUnlocked) Color(0xFFB71C1C) else Color(0xFF2E7D32)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (patrolUnlocked) "🔒 Kunci Menu (Dev)" else "🔓 Buka Kunci (Dev)", fontSize = 11.sp)
+                        }
 
-                if (isHandoverDone) {
-                    TextButton(onClick = onResetHandover, modifier = Modifier.align(Alignment.End)) {
+                        OutlinedButton(
+                            onClick = onDirectSelfieDev,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📸 Tes Selfie Dev", fontSize = 11.sp, color = ColorCyprus)
+                        }
+                    }
+                } else if (patrolUnlocked) {
+                    TextButton(
+                        onClick = {
+                            devBypassUnlock = false
+                            onResetHandover()
+                        },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
                         Text("Akhiri / Kunci Kembali Shift", fontSize = 11.sp, color = Color(0xFFB71C1C))
                     }
                 }
             }
         }
 
+        // 2. KARTU OPERASIONAL PATROLI
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
@@ -136,7 +190,7 @@ fun HomeScreen(
 
                 if (!patrolUnlocked) {
                     Text(
-                        "Selesaikan Serah-Terima Shift di atas terlebih dahulu untuk membuka tombol laporan.",
+                        "🔒 Menu terkunci. Selesaikan Serah-Terima Shift (atau klik 'Buka Kunci (Dev)' di atas) untuk membuka tombol patroli.",
                         fontSize = 12.sp,
                         color = Color(0xFFD97706)
                     )
@@ -148,7 +202,7 @@ fun HomeScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) { Text("📍 Patroli Titik Pos (Pos 1 - Pos 4)") }
+                ) { Text("📍 Patroli Titik Pos (Scan QR Pos 1 - 6)") }
 
                 Button(
                     onClick = onFacilityReport,
@@ -184,6 +238,7 @@ fun HomeScreen(
             }
         }
 
+        // 3. KARTU ARSIP & ANTREAN
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
@@ -191,7 +246,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("3. Arsip & Sinkronisasi Data", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ColorTextDark)
+                Text("3. Riwayat & Antrean Tersimpan", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ColorTextDark)
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
