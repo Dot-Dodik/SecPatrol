@@ -1,4 +1,4 @@
-name: Build signed Android release
+nname: Build signed Android release
 
 on:
   push:
