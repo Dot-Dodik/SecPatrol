@@ -59,7 +59,7 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
         ) {
             Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("Autentikasi Petugas Security", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorCyprus)
-                Text("Masukkan Username / NIP dan Password yang terdaftar di DATABASE_USER.", fontSize = 12.sp, color = ColorTextMuted)
+                Text("Masukkan Username / NIP dan Password yang berstatus AKTIF di DATABASE_USER.", fontSize = 12.sp, color = ColorTextMuted)
 
                 OutlinedTextField(
                     value = usernameInput,
@@ -182,7 +182,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     ) {
         Text("Pengaturan Sistem", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
 
-        // 1. Kartu Pengaturan Ukuran Huruf (Font) untuk HP Resolusi Rendah / Petugas Senior
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("UKURAN HURUF / TAMPILAN TEKS:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
@@ -214,7 +213,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        // 2. Kartu Cabang & Endpoint URL
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("NAMA CABANG POS (HEADER APLIKASI):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
@@ -283,7 +281,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        // 3. Kartu Status Pembersih Cache Otomatis 7 Hari
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("PEMBERSIH CACHE OTOMATIS (7 HARI):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
@@ -297,7 +294,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         context.getSharedPreferences("cache_cleaner_pref", Context.MODE_PRIVATE)
                             .edit().putLong("last_clean_timestamp", 0L).commit()
                         MediaStorageUtil.autoCleanWeeklyCache(context)
-                        Toast.makeText(context, "Pembersihan cache dijalankan (Antrean Offline tetap aman)!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Pembersihan cache dijalankan!", Toast.LENGTH_SHORT).show()
                     },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -317,6 +314,7 @@ fun OfflineQueueScreen(onBack: () -> Unit) {
     val spQueue = remember { context.getSharedPreferences("offline_reports_queue", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     var isUploadingAll by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     fun loadPendingItems(): List<JSONObject> {
         val list = mutableListOf<JSONObject>()
@@ -330,25 +328,57 @@ fun OfflineQueueScreen(onBack: () -> Unit) {
 
     var pendingList by remember { mutableStateOf(loadPendingItems()) }
 
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("Bersihkan Antrean Offline?", fontWeight = FontWeight.Bold) },
+            text = { Text("Semua daftar antrean offline di HP ini akan dihapus. Pastikan data penting sudah diunggah terlebih dahulu.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirm = false
+                        spQueue.edit().putString("pending_list", "[]").commit()
+                        pendingList = emptyList()
+                        Toast.makeText(context, "Antrean Offline berhasil dibersihkan!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C))
+                ) { Text("Ya, Bersihkan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("Batal") }
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Antrean Offline (${pendingList.size})", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
             if (pendingList.isNotEmpty()) {
-                Button(
-                    onClick = {
-                        if (isUploadingAll) return@Button
-                        isUploadingAll = true
-                        scope.launch {
-                            syncPendingOfflineQueue(context)
-                            pendingList = loadPendingItems()
-                            isUploadingAll = false
-                            Toast.makeText(context, "Sinkronisasi selesai!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    enabled = !isUploadingAll,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
-                    shape = RoundedCornerShape(8.dp)
-                ) { Text(if (isUploadingAll) "Mengunggah..." else "Upload Semua") }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = { showClearConfirm = true },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text("🗑️ Bersihkan", fontSize = 11.sp, color = Color(0xFFB71C1C))
+                    }
+                    Button(
+                        onClick = {
+                            if (isUploadingAll) return@Button
+                            isUploadingAll = true
+                            scope.launch {
+                                syncPendingOfflineQueue(context)
+                                pendingList = loadPendingItems()
+                                isUploadingAll = false
+                                Toast.makeText(context, "Sinkronisasi selesai!", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        enabled = !isUploadingAll,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) { Text(if (isUploadingAll) "Mengunggah..." else "Upload Semua", fontSize = 11.sp) }
+                }
             }
         }
 
@@ -379,6 +409,7 @@ fun GalleryReadOnlyScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isSyncing by remember { mutableStateOf(false) }
+    var showClearLogsDialog by remember { mutableStateOf(false) }
 
     fun getLogs(): List<JSONObject> {
         val sp = context.getSharedPreferences("verification_logs", Context.MODE_PRIVATE)
@@ -393,24 +424,59 @@ fun GalleryReadOnlyScreen(onBack: () -> Unit) {
 
     var logList by remember { mutableStateOf(getLogs()) }
 
+    if (showClearLogsDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearLogsDialog = false },
+            title = { Text("Bersihkan Riwayat Arsip?", fontWeight = FontWeight.Bold) },
+            text = { Text("Riwayat tampilan arsip lokal di HP ini akan dikosongkan (Data yang sudah masuk di Google Sheets tetap aman).") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearLogsDialog = false
+                        context.getSharedPreferences("verification_logs", Context.MODE_PRIVATE)
+                            .edit().putString("logs_array", "[]").commit()
+                        logList = emptyList()
+                        Toast.makeText(context, "Arsip lokal dibersihkan!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C))
+                ) { Text("Ya, Bersihkan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearLogsDialog = false }) { Text("Batal") }
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Arsip Verifikasi Patroli", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
-            Button(
-                onClick = {
-                    if (isSyncing) return@Button
-                    isSyncing = true
-                    scope.launch {
-                        syncPendingOfflineQueue(context)
-                        logList = getLogs()
-                        isSyncing = false
-                        Toast.makeText(context, "Arsip tersinkron!", Toast.LENGTH_SHORT).show()
+            Text("Arsip Verifikasi Patroli", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (logList.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = { showClearLogsDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text("🗑️ Bersihkan", fontSize = 11.sp, color = Color(0xFFB71C1C))
                     }
-                },
-                enabled = !isSyncing,
-                colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
-                shape = RoundedCornerShape(8.dp)
-            ) { Text(if (isSyncing) "Syncing..." else "Sync Cloud") }
+                }
+                Button(
+                    onClick = {
+                        if (isSyncing) return@Button
+                        isSyncing = true
+                        scope.launch {
+                            syncPendingOfflineQueue(context)
+                            logList = getLogs()
+                            isSyncing = false
+                            Toast.makeText(context, "Arsip tersinkron!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = !isSyncing,
+                    colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) { Text(if (isSyncing) "Syncing..." else "Sync Cloud", fontSize = 11.sp) }
+            }
         }
 
         if (logList.isEmpty()) {
