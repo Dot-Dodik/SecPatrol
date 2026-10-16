@@ -50,12 +50,14 @@ fun HomeScreen(
         } catch (_: Exception) { 0 }
     }
 
+    val colorScanQrTeal = Color(0xFF00695C)
+
     if (showGpsOffDialog) {
         AlertDialog(
             onDismissRequest = { showGpsOffDialog = false },
             title = { Text("⚠️ GPS / Lokasi Mati!", fontWeight = FontWeight.Bold, color = Color(0xFFB71C1C)) },
             text = {
-                Text("Layanan Lokasi (GPS) di HP Anda sedang dimatikan. Aktifkan GPS sekarang agar koordinat satelit dan Minimap pada foto patroli dapat terekam dengan akurat.")
+                Text("Layanan Lokasi (GPS) di HP Anda sedang dimatikan. Aktifkan GPS sekarang agar koordinat satelit dan Minimap pada foto/video patroli dapat terekam dengan akurat.")
             },
             confirmButton = {
                 Button(
@@ -129,7 +131,7 @@ fun HomeScreen(
 
                     Button(
                         onClick = onScanQr,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScanQrTeal),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
                     ) { Text("Scan QR Masuk", fontSize = 12.sp) }
@@ -194,13 +196,14 @@ fun HomeScreen(
                     )
                 }
 
+                // Warna kotak Titik Pos Patroli disamakan dengan warna Scan QR Masuk (colorScanQrTeal)
                 Button(
                     onClick = onCheckpoint,
                     enabled = patrolUnlocked,
-                    colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus),
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScanQrTeal),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) { Text("📍 Patroli Titik Pos (Scan QR Pos 1 - 6)") }
+                ) { Text("📍 Titik Pos Patroli (Pos 1 - Pos 6)") }
 
                 Button(
                     onClick = onFacilityReport,
