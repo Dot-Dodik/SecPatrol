@@ -205,7 +205,7 @@ fun HomeScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = colorScanQrTeal),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) { Text("📍 Titik Pos Patroli (Pos 1 - Pos 6)") }
+                ) { Text("📍 Titik Pos Patroli (Scan QR)") }
 
                 Button(
                     onClick = onFacilityReport,
