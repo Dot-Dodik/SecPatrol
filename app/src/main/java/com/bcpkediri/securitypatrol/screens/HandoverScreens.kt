@@ -3,7 +3,6 @@ package com.bcpkediri.securitypatrol
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -18,9 +17,10 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -107,27 +107,89 @@ private fun ShiftSelectorRow(
 }
 
 @Composable
+private fun RegisteredOfficerDropdown(
+    label: String,
+    selectedName: String,
+    officerList: List<String>,
+    onSelectOfficer: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedCard(
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, ColorCyprus),
+                colors = CardDefaults.outlinedCardColors(containerColor = Color(0xFFF4F7F5)),
+                modifier = Modifier.fillMaxWidth().clickable { expanded = true }
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = selectedName.ifBlank { "Pilih Nama Lengkap Security" },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ColorCyprus
+                    )
+                    Text("▼", fontSize = 11.sp, color = ColorCyprus)
+                }
+            }
+
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.85f)
+            ) {
+                officerList.forEach { name ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = name,
+                                fontWeight = if (name == selectedName) FontWeight.Bold else FontWeight.Normal,
+                                color = if (name == selectedName) ColorCyprus else ColorTextDark
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            onSelectOfficer(name)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ShowQrScreen(h: Handover, onDone: () -> Unit) {
     val context = LocalContext.current
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
 
+    var officerOptions by remember { mutableStateOf(Uploader.getCachedOfficerNames(context)) }
+    var selectedGiverName by remember {
+        mutableStateOf(h.giver.ifBlank { spUser.getString("officer_name", "") ?: "" })
+    }
     var selectedOldShift by remember {
         mutableStateOf(if (h.oldShift.contains("Malam", true)) "Shift Malam" else "Shift Pagi")
     }
-    var selectedNewShift by remember {
-        mutableStateOf(
-            if (h.newShift.isNotBlank()) h.newShift
-            else if (selectedOldShift == "Shift Pagi") "Shift Malam" else "Shift Pagi"
-        )
+    val autoNewShift = if (selectedOldShift == "Shift Pagi") "Shift Malam" else "Shift Pagi"
+
+    LaunchedEffect(Unit) {
+        val fetched = Uploader.fetchActiveOfficers(context)
+        if (fetched.isNotEmpty()) officerOptions = fetched
     }
 
-    val qrPayload = remember(h.id, h.giver, selectedOldShift, selectedNewShift, h.area) {
+    val qrPayload = remember(h.id, selectedGiverName, selectedOldShift, autoNewShift, h.area) {
         JSONObject().apply {
             put("id", h.id)
-            put("giver", h.giver)
-            put("receiver", h.receiver)
+            put("giver", selectedGiverName)
+            put("receiver", "")
             put("oldShift", selectedOldShift)
-            put("newShift", selectedNewShift)
+            put("newShift", autoNewShift)
             put("area", h.area)
             put("created", h.created)
         }.toString()
@@ -176,20 +238,20 @@ fun ShowQrScreen(h: Handover, onDone: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                ShiftSelectorRow(
-                    title = "SHIFT PENYERAH (SHIFT LAMA):",
-                    selectedShift = selectedOldShift,
-                    onSelectShift = {
-                        selectedOldShift = it
-                        selectedNewShift = if (it == "Shift Pagi") "Shift Malam" else "Shift Pagi"
-                        spUser.edit().putString("officer_shift", it).commit()
-                    }
+                RegisteredOfficerDropdown(
+                    label = "NAMA SECURITY PENYERAH (SHIFT LAMA):",
+                    selectedName = selectedGiverName,
+                    officerList = officerOptions,
+                    onSelectOfficer = { selectedGiverName = it }
                 )
 
                 ShiftSelectorRow(
-                    title = "SHIFT PENERIMA (SHIFT BARU):",
-                    selectedShift = selectedNewShift,
-                    onSelectShift = { selectedNewShift = it }
+                    title = "JADWAL SHIFT PENYERAH SAAT INI:",
+                    selectedShift = selectedOldShift,
+                    onSelectShift = {
+                        selectedOldShift = it
+                        spUser.edit().putString("officer_shift", it).commit()
+                    }
                 )
 
                 if (qrBitmap != null) {
@@ -213,8 +275,8 @@ fun ShowQrScreen(h: Handover, onDone: () -> Unit) {
                 }
 
                 Text(
-                    text = "Shift: $selectedOldShift → $selectedNewShift",
-                    fontSize = 14.sp,
+                    text = "Penyerah: $selectedGiverName ($selectedOldShift)",
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = ColorCyprus
                 )
@@ -249,12 +311,24 @@ fun ScanQrScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
-    val receiverName = remember { spUser.getString("officer_name", "Petugas Baru") ?: "Petugas Baru" }
     val branch = remember { spUser.getString("officer_branch", "Cabang Kediri") ?: "Cabang Kediri" }
 
-    var selectedOldShift by remember { mutableStateOf("Shift Malam") }
+    var officerOptions by remember { mutableStateOf(Uploader.getCachedOfficerNames(context)) }
+    var selectedReceiverName by remember {
+        mutableStateOf(spUser.getString("officer_name", "") ?: officerOptions.firstOrNull().orEmpty())
+    }
     var selectedNewShift by remember {
         mutableStateOf(spUser.getString("officer_shift", "Shift Pagi") ?: "Shift Pagi")
+    }
+
+    LaunchedEffect(Unit) {
+        val fetched = Uploader.fetchActiveOfficers(context)
+        if (fetched.isNotEmpty()) {
+            officerOptions = fetched
+            if (selectedReceiverName.isBlank()) {
+                selectedReceiverName = fetched.first()
+            }
+        }
     }
 
     var cameraRef by remember { mutableStateOf<Camera?>(null) }
@@ -284,25 +358,27 @@ fun ScanQrScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Pindai QR Serah-Terima Shift", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
+        Text("Terima Shift / Scan QR Masuk", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
 
-        // Kotak Pilihan Shift Penyerah & Penerima (Untuk Scan QR maupun Serah-Terima Mandiri)
+        // Hanya menampilkan Dropdown Security Penerima & Jadwal Shift Penerima Baru (Tanpa Shift Lama)
         Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ShiftSelectorRow(
-                    title = "PILIH SHIFT PENYERAH (SHIFT SEBELUMNYA):",
-                    selectedShift = selectedOldShift,
-                    onSelectShift = {
-                        selectedOldShift = it
-                        selectedNewShift = if (it == "Shift Pagi") "Shift Malam" else "Shift Pagi"
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                RegisteredOfficerDropdown(
+                    label = "PILIH NAMA LENGKAP SECURITY PENERIMA (SHIFT BARU):",
+                    selectedName = selectedReceiverName,
+                    officerList = officerOptions,
+                    onSelectOfficer = {
+                        selectedReceiverName = it
+                        spUser.edit().putString("officer_name", it).commit()
                     }
                 )
+
                 ShiftSelectorRow(
-                    title = "PILIH SHIFT PENERIMA (SHIFT ANDA SEKARANG):",
+                    title = "PILIH JADWAL SHIFT PENERIMA (SHIFT BARU):",
                     selectedShift = selectedNewShift,
                     onSelectShift = {
                         selectedNewShift = it
@@ -315,7 +391,7 @@ fun ScanQrScreen(
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = Color.Black),
-            modifier = Modifier.fillMaxWidth().height(360.dp)
+            modifier = Modifier.fillMaxWidth().height(340.dp)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 AndroidView(
@@ -343,23 +419,24 @@ fun ScanQrScreen(
                                                 val raw = b.rawValue
                                                 if (!raw.isNullOrBlank() && !hasScanned) {
                                                     hasScanned = true
+                                                    val derivedOldShift = if (selectedNewShift == "Shift Pagi") "Shift Malam" else "Shift Pagi"
                                                     val ho = try {
                                                         val obj = JSONObject(raw)
                                                         Handover(
                                                             id = obj.optString("id", "HO-${System.currentTimeMillis()}"),
-                                                            giver = obj.optString("giver", "Shift Sebelumnya"),
-                                                            receiver = receiverName,
-                                                            oldShift = obj.optString("oldShift", selectedOldShift).ifBlank { selectedOldShift },
-                                                            newShift = obj.optString("newShift", selectedNewShift).ifBlank { selectedNewShift },
+                                                            giver = obj.optString("giver", "Petugas Shift Lama"),
+                                                            receiver = selectedReceiverName,
+                                                            oldShift = obj.optString("oldShift", derivedOldShift).ifBlank { derivedOldShift },
+                                                            newShift = selectedNewShift,
                                                             area = obj.optString("area", branch),
                                                             created = obj.optLong("created", System.currentTimeMillis())
                                                         )
                                                     } catch (_: Exception) {
                                                         Handover(
                                                             id = raw.take(40),
-                                                            giver = "Shift Sebelumnya",
-                                                            receiver = receiverName,
-                                                            oldShift = selectedOldShift,
+                                                            giver = "Petugas Shift Lama",
+                                                            receiver = selectedReceiverName,
+                                                            oldShift = derivedOldShift,
                                                             newShift = selectedNewShift,
                                                             area = branch,
                                                             created = System.currentTimeMillis()
@@ -391,7 +468,6 @@ fun ScanQrScreen(
                     modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp))
                 )
 
-                // Overlay Kotak Batasan + Sudut Hijau + Laser Hijau
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val boxSize = size.minDimension * 0.62f
                     val left = (size.width - boxSize) / 2f
@@ -402,20 +478,15 @@ fun ScanQrScreen(
                     val strokeW = 7f
                     val greenColor = Color(0xFF00E676)
 
-                    // Sudut Kiri Atas
                     drawLine(greenColor, Offset(left, top), Offset(left + cornerLen, top), strokeW)
                     drawLine(greenColor, Offset(left, top), Offset(left, top + cornerLen), strokeW)
-                    // Sudut Kanan Atas
                     drawLine(greenColor, Offset(right, top), Offset(right - cornerLen, top), strokeW)
                     drawLine(greenColor, Offset(right, top), Offset(right, top + cornerLen), strokeW)
-                    // Sudut Kiri Bawah
                     drawLine(greenColor, Offset(left, bottom), Offset(left + cornerLen, bottom), strokeW)
                     drawLine(greenColor, Offset(left, bottom), Offset(left, bottom - cornerLen), strokeW)
-                    // Sudut Kanan Bawah
                     drawLine(greenColor, Offset(right, bottom), Offset(right - cornerLen, bottom), strokeW)
                     drawLine(greenColor, Offset(right, bottom), Offset(right, bottom - cornerLen), strokeW)
 
-                    // Garis Laser Hijau Bergerak
                     val laserY = top + (boxSize * laserProgress)
                     drawLine(
                         color = greenColor,
@@ -425,7 +496,6 @@ fun ScanQrScreen(
                     )
                 }
 
-                // Tombol Senter di Pojok Kanan Atas Kamera
                 Button(
                     onClick = {
                         val nextTorch = !isTorchOn
@@ -444,7 +514,7 @@ fun ScanQrScreen(
                 }
 
                 Text(
-                    text = "Posisikan barcode tepat di dalam kotak",
+                    text = "Posisikan QR Code rekan di dalam kotak",
                     color = Color.White,
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)
@@ -454,11 +524,14 @@ fun ScanQrScreen(
 
         Button(
             onClick = {
+                val derivedOldShift = if (selectedNewShift == "Shift Pagi") "Shift Malam" else "Shift Pagi"
+                val defaultGiver = officerOptions.firstOrNull { !it.equals(selectedReceiverName, ignoreCase = true) }
+                    ?: selectedReceiverName
                 val soloHo = Handover(
                     id = "HO-SOLO-${System.currentTimeMillis()}",
-                    giver = "Shift Sebelumnya ($selectedOldShift)",
-                    receiver = receiverName,
-                    oldShift = selectedOldShift,
+                    giver = defaultGiver,
+                    receiver = selectedReceiverName,
+                    oldShift = derivedOldShift,
                     newShift = selectedNewShift,
                     area = branch.ifBlank { "Gudang BCP Kediri" },
                     created = System.currentTimeMillis()
@@ -469,7 +542,7 @@ fun ScanQrScreen(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth().height(48.dp)
         ) {
-            Text("Serah-Terima Mandiri ($selectedOldShift → $selectedNewShift)")
+            Text("Serah-Terima Mandiri ($selectedReceiverName • $selectedNewShift)")
         }
 
         OutlinedButton(
@@ -491,14 +564,25 @@ fun SelfieScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
-    val officerName = remember { spUser.getString("officer_name", handover.receiver.ifBlank { "Petugas" }) ?: "Petugas" }
 
-    var selectedOldShift by remember {
-        mutableStateOf(if (handover.oldShift.contains("Malam", true)) "Shift Malam" else "Shift Pagi")
+    var officerOptions by remember { mutableStateOf(Uploader.getCachedOfficerNames(context)) }
+    var selectedGiverName by remember {
+        mutableStateOf(
+            if (handover.giver.isNotBlank() && !handover.giver.startsWith("Shift Sebelumnya")) handover.giver
+            else officerOptions.firstOrNull().orEmpty()
+        )
     }
+    var selectedReceiverName by remember {
+        mutableStateOf(
+            handover.receiver.ifBlank { spUser.getString("officer_name", "") ?: officerOptions.firstOrNull().orEmpty() }
+        )
+    }
+
+    // Hanya memilih Jadwal Shift Penerima Baru (Shift Lama otomatis mengikuti)
     var selectedNewShift by remember {
         mutableStateOf(if (handover.newShift.contains("Malam", true)) "Shift Malam" else "Shift Pagi")
     }
+    val derivedOldShift = if (selectedNewShift == "Shift Pagi") "Shift Malam" else "Shift Pagi"
 
     var addressText by remember { mutableStateOf(LocationUtil.getFallbackPatrolArea(context)) }
     var gpsStatusText by remember { mutableStateOf("Mencari koordinat satelit...") }
@@ -519,7 +603,15 @@ fun SelfieScreen(
         }
     }
 
-    LaunchedEffect(Unit) { refreshLocation() }
+    LaunchedEffect(Unit) {
+        refreshLocation()
+        val fetched = Uploader.fetchActiveOfficers(context)
+        if (fetched.isNotEmpty()) {
+            officerOptions = fetched
+            if (selectedGiverName.isBlank()) selectedGiverName = fetched.first()
+            if (selectedReceiverName.isBlank()) selectedReceiverName = fetched.first()
+        }
+    }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
         val file = pendingFile
@@ -528,33 +620,37 @@ fun SelfieScreen(
             scope.launch {
                 val finalAddress = addressText.ifBlank { LocationUtil.getFallbackPatrolArea(context) }
                 val updatedHo = handover.copy(
-                    receiver = officerName,
-                    oldShift = selectedOldShift,
+                    giver = selectedGiverName,
+                    receiver = selectedReceiverName,
+                    oldShift = derivedOldShift,
                     newShift = selectedNewShift
                 )
-                val bannerTitle = "Serah-terima $selectedOldShift ke $selectedNewShift"
+                val bannerTitle = "Serah-terima $derivedOldShift ke $selectedNewShift"
 
                 withContext(Dispatchers.IO) {
                     applyPhotoAndVideoTimemark(
                         context = context,
                         imageFile = file,
                         badgeLabel = "Security Patrol",
-                        officerName = officerName,
+                        officerName = selectedReceiverName,
                         coordsText = coordsRaw,
                         addressText = finalAddress,
                         bottomBannerText = bannerTitle
                     )
                 }
 
-                spUser.edit().putString("officer_shift", selectedNewShift).commit()
+                spUser.edit()
+                    .putString("officer_name", selectedReceiverName)
+                    .putString("officer_shift", selectedNewShift)
+                    .commit()
 
                 val res = Uploader.send(context, updatedHo, file, 2)
                 isUploading = false
                 if (res.first) {
                     MediaStorageUtil.recordVerificationLog(context, "Serah-Terima Shift", file.name, "TERUPLOAD KE CLOUD", coordsRaw)
-                    Toast.makeText(context, "Serah-Terima ($selectedOldShift → $selectedNewShift) berhasil!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Serah-Terima ($selectedReceiverName • $selectedNewShift) berhasil!", Toast.LENGTH_SHORT).show()
                 } else {
-                    MediaStorageUtil.saveToOfflineQueue(context, "Serah-Terima Shift", officerName, bannerTitle, coordsRaw, file.absolutePath, finalAddress)
+                    MediaStorageUtil.saveToOfflineQueue(context, "Serah-Terima Shift", selectedReceiverName, bannerTitle, coordsRaw, file.absolutePath, finalAddress)
                     MediaStorageUtil.recordVerificationLog(context, "Serah-Terima Shift", file.name, "TERSIMPAN LOKAL (OFFLINE)", coordsRaw)
                     Toast.makeText(context, "Disimpan ke Antrean Offline.", Toast.LENGTH_LONG).show()
                 }
@@ -578,17 +674,22 @@ fun SelfieScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Penyerah: ${handover.giver.ifBlank { "Shift Sebelumnya" }}", fontSize = 13.sp, color = ColorTextDark)
-                Text("Penerima: $officerName", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ColorCyprus)
+                RegisteredOfficerDropdown(
+                    label = "NAMA LENGKAP SECURITY PENYERAH ($derivedOldShift):",
+                    selectedName = selectedGiverName,
+                    officerList = officerOptions,
+                    onSelectOfficer = { selectedGiverName = it }
+                )
 
-                ShiftSelectorRow(
-                    title = "SHIFT PENYERAH (LAMA):",
-                    selectedShift = selectedOldShift,
-                    onSelectShift = { selectedOldShift = it }
+                RegisteredOfficerDropdown(
+                    label = "NAMA LENGKAP SECURITY PENERIMA (SHIFT BARU):",
+                    selectedName = selectedReceiverName,
+                    officerList = officerOptions,
+                    onSelectOfficer = { selectedReceiverName = it }
                 )
 
                 ShiftSelectorRow(
-                    title = "SHIFT PENERIMA (BARU):",
+                    title = "JADWAL SHIFT PENERIMA (BARU):",
                     selectedShift = selectedNewShift,
                     onSelectShift = { selectedNewShift = it }
                 )
@@ -611,7 +712,7 @@ fun SelfieScreen(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth().height(48.dp)
         ) {
-            Text(if (isUploading) "Memproses & Mengunggah..." else "🤳 Ambil Foto Selfie ($selectedOldShift → $selectedNewShift)")
+            Text(if (isUploading) "Memproses & Mengunggah..." else "🤳 Ambil Foto Selfie ($selectedNewShift)")
         }
 
         OutlinedButton(
