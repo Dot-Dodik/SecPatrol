@@ -19,7 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -57,12 +59,14 @@ fun SecPatrolApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
+    val spSettings = remember { context.getSharedPreferences("secpatrol_settings", Context.MODE_PRIVATE) }
 
     var officerId by remember { mutableStateOf(spUser.getString("officer_id", "") ?: "") }
     var officerName by remember { mutableStateOf(spUser.getString("officer_name", "") ?: "") }
     var officerShift by remember { mutableStateOf(spUser.getString("officer_shift", "Shift Pagi") ?: "Shift Pagi") }
     var officerBranch by remember { mutableStateOf(spUser.getString("officer_branch", "") ?: "") }
     var isHandoverDone by remember { mutableStateOf(spUser.getBoolean("is_handover_done", false)) }
+    var fontScale by remember { mutableStateOf(spSettings.getFloat("font_scale", 1.0f)) }
 
     val isDevMode = officerId.trim().equals("ADMIN-DEV", ignoreCase = true) ||
                     spUser.getBoolean("is_dev_mode", false)
@@ -119,215 +123,226 @@ fun SecPatrolApp() {
         officerShift = spUser.getString("officer_shift", "Shift Pagi") ?: "Shift Pagi"
         officerBranch = spUser.getString("officer_branch", "") ?: ""
         isHandoverDone = spUser.getBoolean("is_handover_done", false)
+        fontScale = spSettings.getFloat("font_scale", 1.0f)
     }
 
     BackHandler(enabled = currentScreen != AppScreen.HOME && currentScreen != AppScreen.LOGIN) {
+        refreshUserSession()
         currentScreen = if (officerId.isBlank()) AppScreen.LOGIN else AppScreen.HOME
     }
 
-    if (showPermissionDialog) {
-        AlertDialog(
-            onDismissRequest = { showPermissionDialog = false },
-            title = { Text("Izin Diperlukan", fontWeight = FontWeight.Bold) },
-            text = { Text("Aplikasi membutuhkan izin Kamera dan Lokasi (GPS) untuk mengambil foto bukti patroli ber-watermark.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showPermissionDialog = false
-                        permissionLauncher.launch(requiredPermissions)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus)
-                ) { Text("Berikan Izin") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPermissionDialog = false }) { Text("Tutup") }
-            }
-        )
-    }
-
-    val headerBranch = if (officerBranch.isNotBlank()) {
-        if (officerBranch.startsWith("Cabang", ignoreCase = true)) officerBranch else "Cabang $officerBranch"
-    } else "Cabang Kediri"
-
-    Scaffold(
-        topBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(ColorCyprus)
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    if (currentScreen != AppScreen.HOME && currentScreen != AppScreen.LOGIN) {
-                        IconButton(
-                            onClick = {
-                                refreshUserSession()
-                                currentScreen = if (officerId.isBlank()) AppScreen.LOGIN else AppScreen.HOME
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Text("←", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Column {
-                        Text("$headerBranch - Security Patrol", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        val subTitle = if (officerName.isNotBlank()) {
-                            "$officerName ($officerId) • v${BuildConfig.VERSION_NAME}"
-                        } else {
-                            "Sistem Patroli Terpadu • v${BuildConfig.VERSION_NAME}"
-                        }
-                        Text(subTitle, color = ColorSand, fontSize = 11.sp)
-                    }
+    val baseDensity = LocalDensity.current
+    CompositionLocalProvider(
+        LocalDensity provides Density(density = baseDensity.density, fontScale = fontScale)
+    ) {
+        if (showPermissionDialog) {
+            AlertDialog(
+                onDismissRequest = { showPermissionDialog = false },
+                title = { Text("Izin Diperlukan", fontWeight = FontWeight.Bold) },
+                text = { Text("Aplikasi membutuhkan izin Kamera dan Lokasi (GPS) untuk mengambil foto dan video bukti patroli ber-timemark.") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showPermissionDialog = false
+                            permissionLauncher.launch(requiredPermissions)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ColorCyprus)
+                    ) { Text("Berikan Izin") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPermissionDialog = false }) { Text("Tutup") }
                 }
-                IconButton(onClick = { currentScreen = AppScreen.SETTINGS }) {
-                    Text("⚙️", fontSize = 18.sp)
-                }
-            }
+            )
         }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFFF6F5F0))
-                .padding(innerPadding)
-        ) {
-            when (currentScreen) {
-                AppScreen.LOGIN -> OneTimeLoginScreen(
-                    onLoginSuccess = {
-                        refreshUserSession()
-                        currentScreen = AppScreen.HOME
+
+        val headerBranch = if (officerBranch.isNotBlank()) {
+            if (officerBranch.startsWith("Cabang", ignoreCase = true)) officerBranch else "Cabang $officerBranch"
+        } else "Cabang Kediri"
+
+        Scaffold(
+            topBar = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(ColorCyprus)
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        if (currentScreen != AppScreen.HOME && currentScreen != AppScreen.LOGIN) {
+                            IconButton(
+                                onClick = {
+                                    refreshUserSession()
+                                    currentScreen = if (officerId.isBlank()) AppScreen.LOGIN else AppScreen.HOME
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Text("←", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Column {
+                            Text("$headerBranch - Security Patrol", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            val subTitle = if (officerName.isNotBlank()) {
+                                "$officerName ($officerId) • v${BuildConfig.VERSION_NAME}"
+                            } else {
+                                "Sistem Patroli Terpadu • v${BuildConfig.VERSION_NAME}"
+                            }
+                            Text(subTitle, color = ColorSand, fontSize = 11.sp)
+                        }
                     }
-                )
-                AppScreen.HOME -> HomeScreen(
-                    officerName = officerName,
-                    officerShift = officerShift,
-                    isHandoverDone = isHandoverDone,
-                    isDevMode = isDevMode,
-                    onShowQr = {
-                        activeHandover = Handover(
-                            id = "HO-${System.currentTimeMillis()}",
-                            giver = officerName,
-                            receiver = "",
-                            oldShift = officerShift,
-                            newShift = "",
-                            area = headerBranch,
-                            created = System.currentTimeMillis()
-                        )
-                        navigateProtected(AppScreen.SHOW_QR)
-                    },
-                    onScanQr = { navigateProtected(AppScreen.SCAN_QR) },
-                    onDirectSelfieDev = {
-                        activeHandover = Handover(
-                            id = "DEV-${System.currentTimeMillis()}",
-                            giver = officerName,
-                            receiver = officerName,
-                            oldShift = officerShift,
-                            newShift = officerShift,
-                            area = headerBranch,
-                            created = System.currentTimeMillis()
-                        )
-                        navigateProtected(AppScreen.SELFIE)
-                    },
-                    onCheckpoint = { navigateProtected(AppScreen.CHECKPOINT) },
-                    onFacilityReport = { navigateProtected(AppScreen.FACILITY_REPORT) },
-                    onInboundTruck = { navigateProtected(AppScreen.INBOUND_TRUCK) },
-                    onGensetCheck = { navigateProtected(AppScreen.GENSET_CHECK) },
-                    onVideoPatrol = { navigateProtected(AppScreen.VIDEO_PATROL) },
-                    onOpenGallery = { currentScreen = AppScreen.GALLERY },
-                    onOpenOfflineQueue = { currentScreen = AppScreen.OFFLINE_QUEUE },
-                    onResetHandover = {
-                        spUser.edit().putBoolean("is_handover_done", false).commit()
-                        isHandoverDone = false
-                        Toast.makeText(context, "Kunci shift direset.", Toast.LENGTH_SHORT).show()
-                    },
-                    onLogoutUser = {
-                        spUser.edit().clear().commit()
-                        refreshUserSession()
-                        currentScreen = AppScreen.LOGIN
+                    IconButton(onClick = { currentScreen = AppScreen.SETTINGS }) {
+                        Text("⚙️", fontSize = 18.sp)
                     }
-                )
-                AppScreen.SHOW_QR -> {
-                    val ho = activeHandover ?: Handover(
-                        id = "HO-${System.currentTimeMillis()}",
-                        giver = officerName,
-                        receiver = "",
-                        oldShift = officerShift,
-                        newShift = "",
-                        area = headerBranch,
-                        created = System.currentTimeMillis()
-                    )
-                    ShowQrScreen(
-                        h = ho,
-                        onDone = {
-                            spUser.edit().putBoolean("is_handover_done", false).commit()
-                            isHandoverDone = false
+                }
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFFF6F5F0))
+                    .padding(innerPadding)
+            ) {
+                when (currentScreen) {
+                    AppScreen.LOGIN -> OneTimeLoginScreen(
+                        onLoginSuccess = {
+                            refreshUserSession()
                             currentScreen = AppScreen.HOME
                         }
                     )
-                }
-                AppScreen.SCAN_QR -> ScanQrScreen(
-                    onScanned = { ho ->
-                        activeHandover = ho
-                        currentScreen = AppScreen.SELFIE
-                    },
-                    onSoloHandover = { ho ->
-                        activeHandover = ho
-                        currentScreen = AppScreen.SELFIE
-                    },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.SELFIE -> {
-                    val ho = activeHandover
-                    if (ho != null) {
-                        SelfieScreen(
-                            handover = ho,
-                            onSuccess = {
-                                spUser.edit().putBoolean("is_handover_done", true).commit()
-                                isHandoverDone = true
-                                currentScreen = AppScreen.HOME
-                            },
-                            onBack = { currentScreen = AppScreen.HOME }
+                    AppScreen.HOME -> HomeScreen(
+                        officerName = officerName,
+                        officerShift = officerShift,
+                        isHandoverDone = isHandoverDone,
+                        isDevMode = isDevMode,
+                        onShowQr = {
+                            val defaultNextShift = if (officerShift.contains("Pagi", true)) "Shift Malam" else "Shift Pagi"
+                            activeHandover = Handover(
+                                id = "HO-${System.currentTimeMillis()}",
+                                giver = officerName,
+                                receiver = "Petugas Shift Baru",
+                                oldShift = officerShift,
+                                newShift = defaultNextShift,
+                                area = headerBranch,
+                                created = System.currentTimeMillis()
+                            )
+                            navigateProtected(AppScreen.SHOW_QR)
+                        },
+                        onScanQr = { navigateProtected(AppScreen.SCAN_QR) },
+                        onDirectSelfieDev = {
+                            val defaultOldShift = if (officerShift.contains("Pagi", true)) "Shift Malam" else "Shift Pagi"
+                            activeHandover = Handover(
+                                id = "DEV-${System.currentTimeMillis()}",
+                                giver = officerName,
+                                receiver = officerName,
+                                oldShift = defaultOldShift,
+                                newShift = officerShift,
+                                area = headerBranch,
+                                created = System.currentTimeMillis()
+                            )
+                            navigateProtected(AppScreen.SELFIE)
+                        },
+                        onCheckpoint = { navigateProtected(AppScreen.CHECKPOINT) },
+                        onFacilityReport = { navigateProtected(AppScreen.FACILITY_REPORT) },
+                        onInboundTruck = { navigateProtected(AppScreen.INBOUND_TRUCK) },
+                        onGensetCheck = { navigateProtected(AppScreen.GENSET_CHECK) },
+                        onVideoPatrol = { navigateProtected(AppScreen.VIDEO_PATROL) },
+                        onOpenGallery = { currentScreen = AppScreen.GALLERY },
+                        onOpenOfflineQueue = { currentScreen = AppScreen.OFFLINE_QUEUE },
+                        onResetHandover = {
+                            spUser.edit().putBoolean("is_handover_done", false).commit()
+                            isHandoverDone = false
+                            Toast.makeText(context, "Kunci shift direset.", Toast.LENGTH_SHORT).show()
+                        },
+                        onLogoutUser = {
+                            spUser.edit().clear().commit()
+                            refreshUserSession()
+                            currentScreen = AppScreen.LOGIN
+                        }
+                    )
+                    AppScreen.SHOW_QR -> {
+                        val defaultNextShift = if (officerShift.contains("Pagi", true)) "Shift Malam" else "Shift Pagi"
+                        val ho = activeHandover ?: Handover(
+                            id = "HO-${System.currentTimeMillis()}",
+                            giver = officerName,
+                            receiver = "Petugas Shift Baru",
+                            oldShift = officerShift,
+                            newShift = defaultNextShift,
+                            area = headerBranch,
+                            created = System.currentTimeMillis()
                         )
-                    } else {
-                        currentScreen = AppScreen.HOME
+                        ShowQrScreen(
+                            h = ho,
+                            onDone = {
+                                spUser.edit().putBoolean("is_handover_done", false).commit()
+                                isHandoverDone = false
+                                currentScreen = AppScreen.HOME
+                            }
+                        )
                     }
+                    AppScreen.SCAN_QR -> ScanQrScreen(
+                        onScanned = { ho ->
+                            activeHandover = ho
+                            currentScreen = AppScreen.SELFIE
+                        },
+                        onSoloHandover = { ho ->
+                            activeHandover = ho
+                            currentScreen = AppScreen.SELFIE
+                        },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.SELFIE -> {
+                        val ho = activeHandover
+                        if (ho != null) {
+                            SelfieScreen(
+                                handover = ho,
+                                onSuccess = {
+                                    spUser.edit().putBoolean("is_handover_done", true).commit()
+                                    isHandoverDone = true
+                                    refreshUserSession()
+                                    currentScreen = AppScreen.HOME
+                                },
+                                onBack = { currentScreen = AppScreen.HOME }
+                            )
+                        } else {
+                            currentScreen = AppScreen.HOME
+                        }
+                    }
+                    AppScreen.CHECKPOINT -> CheckpointScreen(
+                        onSuccess = { currentScreen = AppScreen.HOME },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.FACILITY_REPORT -> FacilityReportScreen(
+                        onSuccess = { currentScreen = AppScreen.HOME },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.INBOUND_TRUCK -> InboundTruckReportScreen(
+                        onSuccess = { currentScreen = AppScreen.HOME },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.GENSET_CHECK -> GensetCheckScreen(
+                        onSuccess = { currentScreen = AppScreen.HOME },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.VIDEO_PATROL -> VideoPatrolScreen(
+                        onSuccess = { currentScreen = AppScreen.HOME },
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.GALLERY -> GalleryReadOnlyScreen(
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.OFFLINE_QUEUE -> OfflineQueueScreen(
+                        onBack = { currentScreen = AppScreen.HOME }
+                    )
+                    AppScreen.SETTINGS -> SettingsScreen(
+                        onBack = {
+                            refreshUserSession()
+                            currentScreen = if (officerId.isBlank()) AppScreen.LOGIN else AppScreen.HOME
+                        }
+                    )
                 }
-                AppScreen.CHECKPOINT -> CheckpointScreen(
-                    onSuccess = { currentScreen = AppScreen.HOME },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.FACILITY_REPORT -> FacilityReportScreen(
-                    onSuccess = { currentScreen = AppScreen.HOME },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.INBOUND_TRUCK -> InboundTruckReportScreen(
-                    onSuccess = { currentScreen = AppScreen.HOME },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.GENSET_CHECK -> GensetCheckScreen(
-                    onSuccess = { currentScreen = AppScreen.HOME },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.VIDEO_PATROL -> VideoPatrolScreen(
-                    onSuccess = { currentScreen = AppScreen.HOME },
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.GALLERY -> GalleryReadOnlyScreen(
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.OFFLINE_QUEUE -> OfflineQueueScreen(
-                    onBack = { currentScreen = AppScreen.HOME }
-                )
-                AppScreen.SETTINGS -> SettingsScreen(
-                    onBack = {
-                        refreshUserSession()
-                        currentScreen = if (officerId.isBlank()) AppScreen.LOGIN else AppScreen.HOME
-                    }
-                )
             }
         }
     }
