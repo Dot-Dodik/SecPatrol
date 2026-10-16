@@ -59,7 +59,7 @@ fun OneTimeLoginScreen(onLoginSuccess: () -> Unit) {
         ) {
             Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("Autentikasi Petugas Security", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorCyprus)
-                Text("Masukkan Username / NIP dan Password yang terdaftar di database.", fontSize = 12.sp, color = ColorTextMuted)
+                Text("Masukkan Username / NIP dan Password yang terdaftar di DATABASE_USER.", fontSize = 12.sp, color = ColorTextMuted)
 
                 OutlinedTextField(
                     value = usernameInput,
@@ -164,15 +164,57 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     var endpointInput by remember { mutableStateOf(spSettings.getString("endpoint_url", "") ?: "") }
     var branchInput by remember { mutableStateOf(spUser.getString("officer_branch", "") ?: "") }
+    var selectedFontScale by remember { mutableStateOf(spSettings.getFloat("font_scale", 1.0f)) }
     var testResult by remember { mutableStateOf("") }
     var isTesting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    val fontOptions = listOf(
+        Pair("Kecil", 0.88f),
+        Pair("Normal", 1.0f),
+        Pair("Besar", 1.18f),
+        Pair("Lansia / XL", 1.32f)
+    )
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("Pengaturan Sistem", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextDark)
+
+        // 1. Kartu Pengaturan Ukuran Huruf (Font) untuk HP Resolusi Rendah / Petugas Senior
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("UKURAN HURUF / TAMPILAN TEKS:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
+                Text(
+                    "Sesuaikan ukuran teks jika layar HP beresolusi kecil atau agar lebih jelas dibaca oleh petugas.",
+                    fontSize = 11.sp,
+                    color = ColorTextDark
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    fontOptions.forEach { (label, scaleVal) ->
+                        val isSelected = kotlin.math.abs(selectedFontScale - scaleVal) < 0.05f
+                        Button(
+                            onClick = {
+                                selectedFontScale = scaleVal
+                                spSettings.edit().putFloat("font_scale", scaleVal).commit()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) ColorCyprus else Color(0xFFE0DDD5),
+                                contentColor = if (isSelected) Color.White else ColorTextDark
+                            ),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Kartu Cabang & Endpoint URL
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("NAMA CABANG POS (HEADER APLIKASI):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
@@ -229,6 +271,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onClick = {
                             Uploader.setEndpointUrl(context, endpointInput.trim())
                             spUser.edit().putString("officer_branch", branchInput.trim()).commit()
+                            spSettings.edit().putFloat("font_scale", selectedFontScale).commit()
                             Toast.makeText(context, "Pengaturan disimpan!", Toast.LENGTH_SHORT).show()
                             onBack()
                         },
@@ -239,6 +282,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
         }
+
+        // 3. Kartu Status Pembersih Cache Otomatis 7 Hari
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = ColorSurfaceLight)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("PEMBERSIH CACHE OTOMATIS (7 HARI):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorTextMuted)
+                Text(
+                    "✅ Aktif: Sistem otomatis menghapus file cache foto/video sementara yang sudah berumur lebih dari 7 hari tanpa mengganggu Antrean Offline.",
+                    fontSize = 11.sp,
+                    color = Color(0xFF2E7D32)
+                )
+                OutlinedButton(
+                    onClick = {
+                        context.getSharedPreferences("cache_cleaner_pref", Context.MODE_PRIVATE)
+                            .edit().putLong("last_clean_timestamp", 0L).commit()
+                        MediaStorageUtil.autoCleanWeeklyCache(context)
+                        Toast.makeText(context, "Pembersihan cache dijalankan (Antrean Offline tetap aman)!", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("🧹 Jalankan Pembersih Cache Sekarang", fontSize = 12.sp, color = ColorCyprus)
+                }
+            }
+        }
+
         OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Kembali") }
     }
 }
@@ -419,12 +487,12 @@ suspend fun syncPendingOfflineQueue(context: Context) = withContext(Dispatchers.
                         id = "HO-${file.lastModified()}",
                         giver = officer,
                         receiver = officer,
-                        oldShift = note.substringAfter("Serah-terima ").substringBefore(" ke ").ifBlank { "Shift Lama" },
-                        newShift = note.substringAfter("ke ").ifBlank { "Shift Baru" },
+                        oldShift = note.substringAfter("Serah-terima ").substringBefore(" ke ").ifBlank { "Shift Malam" },
+                        newShift = note.substringAfter("ke ").ifBlank { "Shift Pagi" },
                         area = fallbackArea,
                         created = file.lastModified()
                     )
-                    Uploader.send(context, ho, file, 1).first
+                    Uploader.send(context, ho, file, 2).first
                 }
                 isTruck -> {
                     val nopol = if (rawType.contains("Truck ")) rawType.substringAfter("Truck ").substringBefore(" [").trim() else "TRUCK"
@@ -436,7 +504,7 @@ suspend fun syncPendingOfflineQueue(context: Context) = withContext(Dispatchers.
                     }
                     Uploader.sendInbound(context, nopol, parsedDriver, "-", "-", "-", "-", "-", parsedStatus, officer, note, coords, listOf(file)).first
                 }
-                isGenset -> Uploader.sendGensetCheck(context, "Tersinkron", "Normal", "Normal", officer, note, address, coords, file, null, null).first
+                isGenset -> Uploader.sendGensetCheck(context, "Uji Pemanasan (Warming Up Rutin)", "Level Normal & Bening/Kuning", "Standby Normal", officer, note, address, coords, file, null, null).first
                 isVideo -> Uploader.sendVideoPatrol(context, rawType, officer, note, coords, file).first
                 isFacility -> Uploader.sendFacilityMulti(context, rawType, officer, note, address, coords, listOf(file)).first
                 else -> Uploader.sendCheckpoint(context, rawType, officer, note, address, coords, file).first
