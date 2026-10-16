@@ -3,6 +3,7 @@ package com.bcpkediri.securitypatrol
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,11 +17,100 @@ import java.net.URLEncoder
 
 object Uploader {
 
+    /**
+     * Menghasilkan format persis seperti:
+     * - vivo V2109 (Android 13)
+     * - Xiaomi 22021211RG (Android 14)
+     * - OPPO CPH1933 (Android 11)
+     */
+    fun getDeviceHardwareInfo(): String {
+        val manufacturer = (Build.MANUFACTURER ?: "").trim()
+        val model = (Build.MODEL ?: "").trim()
+        val combined = if (model.startsWith(manufacturer, ignoreCase = true)) {
+            model
+        } else {
+            "$manufacturer $model".trim()
+        }
+        return "$combined (Android ${Build.VERSION.RELEASE})"
+    }
+
     private fun buildIdempotencyKey(file: File): String = "IDEMP_${file.name}_${file.length()}"
 
     private fun getSessionToken(context: Context): String {
         val spUser = context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
         return spUser.getString("session_token", "") ?: ""
+    }
+
+    private fun getOfficerId(context: Context): String {
+        val spUser = context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
+        return spUser.getString("officer_id", "") ?: ""
+    }
+
+    fun getCachedOfficerNames(context: Context): List<String> {
+        val spUser = context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
+        val raw = spUser.getString("registered_officers_json", "[]") ?: "[]"
+        val list = mutableListOf<String>()
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val item = arr.get(i)
+                val name = when (item) {
+                    is JSONObject -> item.optString("name", "").trim()
+                    is String -> item.trim()
+                    else -> ""
+                }
+                if (name.isNotBlank() && !list.contains(name)) {
+                    list.add(name)
+                }
+            }
+        } catch (_: Exception) {}
+
+        val currentOfficer = (spUser.getString("officer_name", "") ?: "").trim()
+        if (currentOfficer.isNotBlank() && !list.contains(currentOfficer)) {
+            list.add(0, currentOfficer)
+        }
+        if (list.isEmpty()) {
+            list.addAll(listOf("EKO SISWOYO", "ANDRE DWI CAHYONO", "ALEX PERDANA", "TESTAROSA"))
+        }
+        return list
+    }
+
+    private fun saveCachedOfficerNames(context: Context, arr: JSONArray?) {
+        if (arr == null || arr.length() == 0) return
+        context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
+            .edit()
+            .putString("registered_officers_json", arr.toString())
+            .commit()
+    }
+
+    suspend fun fetchActiveOfficers(context: Context): List<String> = withContext(Dispatchers.IO) {
+        val endpoint = getEndpointUrl(context)
+        if (endpoint.isBlank() || !LocationUtil.checkNetworkAvailable(context)) {
+            return@withContext getCachedOfficerNames(context)
+        }
+        return@withContext try {
+            val urlStr = if (endpoint.contains("?")) "$endpoint&action=getActiveOfficers" else "$endpoint?action=getActiveOfficers"
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 6000
+                readTimeout = 6000
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+            }
+            if (conn.responseCode == 200) {
+                val resp = conn.inputStream.bufferedReader().use { it.readText() }.trim()
+                if (!resp.startsWith("<")) {
+                    val json = JSONObject(resp)
+                    val arr = json.optJSONArray("officers")
+                    if (arr != null && arr.length() > 0) {
+                        saveCachedOfficerNames(context, arr)
+                    }
+                }
+            }
+            getCachedOfficerNames(context)
+        } catch (_: Exception) {
+            getCachedOfficerNames(context)
+        }
     }
 
     private fun encodeFileToBase64(file: File): String {
@@ -116,42 +206,43 @@ object Uploader {
         if (endpoint.isBlank()) return@withContext Triple(false, "URL endpoint belum diatur di Pengaturan", null)
 
         if (!LocationUtil.checkNetworkAvailable(context)) {
-            val spUser = context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
-            val cachedUser = spUser.getString("officer_id", "") ?: ""
-            return@withContext if (cachedUser.equals(username.trim(), ignoreCase = true)) {
-                Triple(false, "Perangkat offline. Sesi aktif tetap dapat digunakan; login ulang butuh internet.", null)
-            } else Triple(false, "Login baru memerlukan koneksi internet.", null)
+            return@withContext Triple(false, "Login memerlukan koneksi internet untuk memverifikasi status aktif akun.", null)
         }
+
+        val cleanUser = username.trim().uppercase()
+        val devModel = getDeviceHardwareInfo()
 
         return@withContext try {
             val payload = JSONObject()
                 .put("action", "verifyUser")
-                .put("username", username.trim().uppercase())
+                .put("username", cleanUser)
                 .put("password", passwordInput)
+                .put("device", devModel)
+                .put("deviceModel", devModel)
 
             val res = postJson(endpoint, payload)
             if (res.first) {
                 val trimmed = res.second.trim()
-                if (trimmed.startsWith("<") || trimmed.contains("<!DOCTYPE", ignoreCase = true)) {
-                    return@withContext Triple(false, "Backend menolak akses. Periksa izin deployment Web App.", null)
-                }
-                val json = JSONObject(trimmed)
-                if (json.optString("status") == "success") {
-                    val u = json.getJSONObject("user")
-                    val name = u.optString("name")
-                    val shift = u.optString("shift", "Shift Pagi")
-                    val sessionToken = json.optString("sessionToken", "")
-                    if (sessionToken.isNotBlank()) {
+                if (!trimmed.startsWith("<") && !trimmed.contains("<!DOCTYPE", ignoreCase = true)) {
+                    val json = JSONObject(trimmed)
+                    if (json.optString("status") == "success") {
+                        val u = json.getJSONObject("user")
+                        val name = u.optString("name")
+                        val shift = u.optString("shift", "Shift Pagi")
+                        val sessionToken = json.optString("sessionToken", "")
+                        saveCachedOfficerNames(context, json.optJSONArray("officers"))
                         context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE)
-                            .edit().putString("session_token", sessionToken).commit()
+                            .edit()
+                            .putString("session_token", sessionToken)
+                            .putString("officer_device", devModel)
+                            .commit()
+                        return@withContext Triple(true, "Terdaftar", Pair(name, shift))
+                    } else {
+                        return@withContext Triple(false, json.optString("message", "Akun tidak aktif atau password salah"), null)
                     }
-                    Triple(true, "Terdaftar", Pair(name, shift))
-                } else {
-                    Triple(false, json.optString("message", "Username atau password salah"), null)
                 }
-            } else {
-                Triple(false, res.second, null)
             }
+            Triple(false, res.second.ifBlank { "Username/password salah atau akun belum aktif" }, null)
         } catch (e: Exception) {
             Triple(false, "Gagal koneksi: ${e.message}", null)
         }
@@ -212,9 +303,13 @@ object Uploader {
 
     suspend fun send(context: Context, handover: Handover, file: File, faceCount: Int = 1): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val json = JSONObject().apply {
                 put("action", "handover")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 put("idempotencyKey", buildIdempotencyKey(file))
                 put("handoverId", handover.id)
                 put("giver", handover.giver)
@@ -240,9 +335,13 @@ object Uploader {
         file: File
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val json = JSONObject().apply {
                 put("action", "checkpoint")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 put("idempotencyKey", buildIdempotencyKey(file))
                 put("checkpointName", checkpointName)
                 put("officerName", officer)
@@ -266,12 +365,16 @@ object Uploader {
         files: List<File>
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val arr = JSONArray()
             files.forEach { if (it.exists()) arr.put(encodeFileToBase64(it)) }
             val firstFile = files.firstOrNull()
             val json = JSONObject().apply {
                 put("action", "facility_multi")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 if (firstFile != null) put("idempotencyKey", buildIdempotencyKey(firstFile))
                 put("reportName", reportName)
                 put("officerName", officer)
@@ -304,12 +407,16 @@ object Uploader {
         files: List<File>
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val arr = JSONArray()
             files.forEach { if (it.exists()) arr.put(encodeFileToBase64(it)) }
             val firstFile = files.firstOrNull()
             val json = JSONObject().apply {
                 put("action", "inbound")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 if (firstFile != null) put("idempotencyKey", buildIdempotencyKey(firstFile))
                 put("nopol", nopol)
                 put("driverName", driverName)
@@ -346,9 +453,13 @@ object Uploader {
         videoFile: File?
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val json = JSONObject().apply {
                 put("action", "genset")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 put("idempotencyKey", buildIdempotencyKey(photoFisik))
                 put("statusGenset", statusGenset)
                 put("oilCheck", oilCheck)
@@ -375,9 +486,13 @@ object Uploader {
         videoFile: File
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
+            val devInfo = getDeviceHardwareInfo()
             val json = JSONObject().apply {
                 put("action", "video_patrol")
                 put("sessionToken", getSessionToken(context))
+                put("officerId", getOfficerId(context))
+                put("device", devInfo)
+                put("deviceModel", devInfo)
                 put("idempotencyKey", buildIdempotencyKey(videoFile))
                 put("title", title)
                 put("officerName", officer)
