@@ -40,6 +40,8 @@ fun HomeScreen(
     val spUser = remember { context.getSharedPreferences("secpatrol_user", Context.MODE_PRIVATE) }
     var devBypassUnlock by remember { mutableStateOf(spUser.getBoolean("is_handover_done", isHandoverDone)) }
     val patrolUnlocked = isHandoverDone || devBypassUnlock
+    val deviceHardwareInfo = remember { Uploader.getDeviceHardwareInfo() }
+    val officerNip = remember { spUser.getString("officer_id", "-") ?: "-" }
 
     var showGpsOffDialog by remember { mutableStateOf(!LocationUtil.isGpsEnabled(context)) }
 
@@ -93,9 +95,10 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("1. Serah-Terima Shift", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ColorCyprus)
                         Text("Petugas: $officerName ($officerShift)", fontSize = 12.sp, color = ColorTextMuted)
+                        Text("📱 Perangkat HP: $deviceHardwareInfo", fontSize = 11.sp, color = ColorCyprus, fontWeight = FontWeight.Medium)
                     }
                     Surface(
                         color = if (patrolUnlocked) Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
@@ -196,7 +199,6 @@ fun HomeScreen(
                     )
                 }
 
-                // Warna kotak Titik Pos Patroli disamakan dengan warna Scan QR Masuk (colorScanQrTeal)
                 Button(
                     onClick = onCheckpoint,
                     enabled = patrolUnlocked,
@@ -246,7 +248,18 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("3. Riwayat & Antrean Tersimpan", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ColorTextDark)
+                Text("3. Menu User, Riwayat & Antrean", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ColorTextDark)
+
+                Surface(
+                    color = Color(0xFFEDE9E0),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("👤 User Aktif: $officerName ($officerNip)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ColorCyprus)
+                        Text("📱 Tipe Perangkat HP: $deviceHardwareInfo", fontSize = 12.sp, color = ColorTextDark)
+                    }
+                }
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
