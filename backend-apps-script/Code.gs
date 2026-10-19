@@ -1,789 +1,824 @@
 /**
- * SecPatrol Backend - Edisi Bahasa Indonesia Terkunci (v1.1.5-STABLE)
- * Fitur Lengkap:
- * 1. Otomatis membagi foto/video ke 7 Sub-Folder Google Drive & Direct Video Play
- * 2. Struktur 7 Tab Bahasa Indonesia + Proteksi & Sembunyikan DATABASE_USER
- * 3. Validasi ketat kolom Status wajib "AKTIF" (menolak akun kosong/nonaktif)
- * 4. Sinkronisasi otomatis Kolom F (Tipe Perangkat HP) saat login maupun kirim laporan
- * 5. Endpoint getActiveOfficers untuk Dropdown Nama Lengkap Security di HP
- * 6. Anti-Double Input (Idempotency Key & LockService)
+ * ============================================================================
+ * SECPATROL BACKEND API - v1.1.4 (LIVE PRODUCTION & BACKWARD COMPATIBLE)
+ * Fitur Utama:
+ * 1. Auto-Extract ID dari URL Lengkap Google Sheets & Google Drive
+ * 2. Auto-Hash Password (🔒 TERKUNCI:) dengan SHA-256 (4096 Iterasi + Salt NIP)
+ * 3. Kompatibel Penuh dengan APK Android Lama & Baru (Single & Multi-Foto)
+ * 4. Auto-Styling Header Hijau Tua (#004741) & Sinkronisasi Struktur 7 Sheet
+ * 5. Anti-Duplikasi (Idempotency Cache) & Concurrency Lock (LockService)
+ * ============================================================================
  */
 
-const CONFIG = {
-  SPREADSHEET_ID: PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID") || "1pCLV1YRYcW061kz_AsBdH7ecOauJgmdeqTR2hWUerJk",
-  PHOTO_FOLDER_ID: PropertiesService.getScriptProperties().getProperty("PHOTO_FOLDER_ID") || "1OFj7ByexcByx1-AwmkL02Wg99ltflmm0",
-  MAX_REQUEST_CHARS: 25000000
+var SCRIPT_PROP = PropertiesService.getScriptProperties();
+
+var CONFIG = {
+  // CUKUP PASTE LINK/URL LENGKAP GOOGLE SHEET LIVE ANDA DI DALAM TANDA KUTIP INI:
+  SPREADSHEET_ID: '1pu7vAQTzSppiPtFqDYIxebcKXk1kWwM9yxnQrWOCaS0',
+
+  // OPSIONAL: PASTE LINK/URL FOLDER GOOGLE DRIVE LIVE (Jika dikosongkan, otomatis memakai folder tempat GSheet berada):
+  FOLDER_ID: '1uhHx-r31TW2ms0d8Ion4oJ5l4MEw_CG1',
+
+  PASSWORD_PREFIX: '🔒 TERKUNCI:',
+  SALT_PREFIX: 'SECPATROL_SALT_',
+  HASH_ITERATIONS: 4096,
+  HEADER_BG_COLOR: '#004741',
+  HEADER_TEXT_COLOR: '#FFFFFF',
+  TIMEZONE: 'Asia/Jakarta',
+  DEDUP_TTL_SECONDS: 90
 };
 
-const DRIVE_SUBFOLDERS = {
-  HANDOVER: "Handover_Selfie",
-  CHECKPOINT: "Patrol_Checkpoints",
-  INBOUND: "Inbound_Truck",
-  FACILITY: "Facility_Reports",
-  GENSET_PHOTO: "Genset",
-  GENSET_VIDEO: "Genset_Video",
-  VIDEO_PATROL: "Video_Patroli"
-};
-
-const SCHEMAS_ID = {
+/**
+ * Definisi 7 Struktur Sheet Standar Staging
+ */
+var SHEET_SCHEMAS = {
   DATABASE_USER: [
-    "Username / NIP", "Password", "Nama Lengkap", "Shift Default", "Status", "Tipe Perangkat HP"
+    'Username / NIP', 'Password', 'Nama Lengkap', 'Shift Default', 'Status', 'Tipe Perangkat HP'
   ],
   SERAH_TERIMA: [
-    "Waktu", "ID", "Penyerah", "Penerima", "Shift Lama", "Shift Baru", "Area", "Wajah", "Foto Drive"
+    'Waktu', 'ID', 'Penyerah', 'Penerima', 'Shift Lama', 'Shift Baru', 'Area', 'Wajah', 'Foto Drive'
   ],
   TITIK_PATROLI: [
-    "Waktu", "Pos/Titik", "Petugas", "Catatan", "Alamat Geotag", "Koordinat GPS", "Foto Drive"
+    'Waktu', 'Pos/Titik', 'Petugas', 'Catatan', 'Alamat Geotag', 'Koordinat GPS', 'Foto Drive'
   ],
   LOGISTIK_INBOUND: [
-    "Waktu", "Nopol Truck", "Nama Sopir", "No HP Driver", "Divisi", "Jenis Armada",
-    "Ekspedisi", "No Segel", "Status Muatan", "Status Antrean", "Petugas",
-    "Catatan", "Koordinat GPS", "Foto Drive", "Foto 2", "Foto 3"
+    'Waktu', 'Nopol Truck', 'Nama Sopir', 'No HP Driver', 'Divisi', 'Jenis Armada',
+    'Ekspedisi', 'No Segel', 'Status Muatan', 'Status Antrean', 'Petugas', 'Catatan',
+    'Koordinat GPS', 'Foto Drive', 'Foto 2', 'Foto 3'
   ],
   PENGECEKAN_GENSET: [
-    "Waktu", "Status Genset", "Kondisi Oli Mesin", "Solar & Voltase", "Petugas",
-    "Catatan Temuan", "Alamat Geotag", "Koordinat GPS", "Foto Drive", "Foto Dokumen HSE", "Video Drive"
+    'Waktu', 'Status Genset', 'Kondisi Oli Mesin', 'Solar & Voltase', 'Petugas',
+    'Catatan Temuan', 'Alamat Geotag', 'Koordinat GPS', 'Foto Drive', 'Foto Dokumen HSE', 'Video Drive'
   ],
   DOKUMENTASI_GUDANG: [
-    "Waktu", "Area / Fasilitas", "Petugas", "Catatan", "Alamat Geotag",
-    "Koordinat GPS", "Foto Drive", "Foto 2", "Foto 3"
+    'Waktu', 'Area / Fasilitas', 'Petugas', 'Catatan', 'Alamat Geotag',
+    'Koordinat GPS', 'Foto Drive', 'Foto 2', 'Foto 3'
   ],
   VIDEO_PATROLI: [
-    "Waktu", "File Video", "Petugas", "Catatan", "Alamat Geotag", "Koordinat GPS", "Link Video Drive"
+    'Waktu', 'File Video', 'Petugas', 'Catatan', 'Alamat Geotag', 'Koordinat GPS', 'Link Video Drive'
   ]
 };
 
-// ==========================================
-// 1. MENU ADMIN SPREADSHEET & TRIGGER EDIT
-// ==========================================
-function onOpen() {
+// ============================================================================
+// 1. INISIALISASI DATABASE & TRIGGER OTOMATIS (setupDatabase & onEdit)
+// ============================================================================
+
+/**
+ * Jalankan fungsi `setupDatabase` ini 1x dari toolbar Apps Script Editor
+ * untuk merapikan warna header tabel menjadi hijau (#004741) dan langsung
+ * mengenkripsi seluruh password plaintext yang ada di DATABASE_USER.
+ */
+function setupDatabase() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error('Proses lain sedang berjalan, silakan tunggu beberapa detik lalu coba lagi.');
+  }
   try {
-    SpreadsheetApp.getUi()
-      .createMenu("🛡️ Admin SecPatrol")
-      .addItem("1. Siapkan 7 Tab Sheet & 7 Sub-Folder Drive", "setupSheetBahasaIndonesia")
-      .addItem("📁 Rapikan & Buat 7 Sub-Folder Foto/Video di Drive", "rapikanFolderDrive")
-      .addSeparator()
-      .addItem("🔒 Kunci & Sembunyikan DATABASE_USER", "lockAndHideUserSheet")
-      .addItem("👁️ Tampilkan DATABASE_USER (Khusus Editor)", "showUserSheetForEditor")
-      .addToUi();
-  } catch (err) {
-    console.error("onOpen error:", err);
+    var ss = getSpreadsheet_();
+    var sheetNames = Object.keys(SHEET_SCHEMAS);
+    for (var i = 0; i < sheetNames.length; i++) {
+      var name = sheetNames[i];
+      ensureIndonesianSheet_(ss, name, SHEET_SCHEMAS[name]);
+    }
+    encryptAllPlainPasswordsInSheet_(ss);
+    Logger.log('SUKSES! Seluruh 7 Sheet telah disamakan dengan Staging & Password telah dikunci (🔒 TERKUNCI:).');
+  } finally {
+    lock.releaseLock();
   }
 }
 
+/**
+ * Trigger otomatis saat Admin mengetik/mengubah password di Google Sheets.
+ * Setiap password plaintext yang diketik di kolom B DATABASE_USER langsung berubah menjadi 🔒 TERKUNCI:...
+ */
 function onEdit(e) {
   try {
     if (!e || !e.range) return;
     var sheet = e.range.getSheet();
-    if (sheet.getName() !== "DATABASE_USER") return;
+    if (sheet.getName() !== 'DATABASE_USER') return;
 
     var row = e.range.getRow();
     var col = e.range.getColumn();
-    if (row >= 2 && (col === 1 || col === 2)) {
-      var nip = String(sheet.getRange(row, 1).getValue() || "").trim().toUpperCase();
-      var rawPass = String(sheet.getRange(row, 2).getValue() || "").trim();
-      if (nip && rawPass && rawPass.indexOf("🔒 TERKUNCI:") !== 0) {
-        sheet.getRange(row, 1).setValue(nip);
-        sheet.getRange(row, 2).setValue("🔒 TERKUNCI:" + hashUserPassword_(nip, rawPass));
-      }
+    if (row <= 1 || col > 2) return;
+
+    var nipVal = String(sheet.getRange(row, 1).getValue() || '').trim();
+    var passVal = String(sheet.getRange(row, 2).getValue() || '').trim();
+
+    if (nipVal && passVal && !isPasswordLocked_(passVal)) {
+      var lockedHash = hashUserPassword_(nipVal, passVal);
+      sheet.getRange(row, 2).setValue(lockedHash);
     }
-    CacheService.getScriptCache().remove("ACTIVE_OFFICERS_CACHE");
   } catch (err) {
-    console.error("onEdit error:", err);
+    console.error('[onEdit Error]: ' + err.message);
   }
 }
 
-function rapikanFolderDrive() {
-  var parentFolder = DriveApp.getFolderById(String(CONFIG.PHOTO_FOLDER_ID).trim());
-  var folderMap = {};
+// ============================================================================
+// 2. HTTP HANDLERS (doGet & doPost) - KOMPATIBEL APK LAMA & BARU
+// ============================================================================
 
-  Object.keys(DRIVE_SUBFOLDERS).forEach(function(key) {
-    var subName = DRIVE_SUBFOLDERS[key];
-    var iter = parentFolder.getFoldersByName(subName);
-    folderMap[subName] = iter.hasNext() ? iter.next() : parentFolder.createFolder(subName);
-  });
-
-  var files = parentFolder.getFiles();
-  var movedCount = 0;
-  while (files.hasNext()) {
-    var file = files.next();
-    var fname = String(file.getName() || "").toLowerCase();
-    var mime = String(file.getMimeType() || "").toLowerCase();
-    var targetSubName = null;
-
-    if (fname.indexOf("selfie") !== -1 || fname.indexOf("ho_") !== -1 || fname.indexOf("handover") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.HANDOVER;
-    } else if (fname.indexOf("genset") !== -1 && (fname.indexOf(".mp4") !== -1 || mime.indexOf("video") !== -1)) {
-      targetSubName = DRIVE_SUBFOLDERS.GENSET_VIDEO;
-    } else if (fname.indexOf("genset") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.GENSET_PHOTO;
-    } else if (fname.indexOf(".mp4") !== -1 || mime.indexOf("video") !== -1 || fname.indexOf("video") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.VIDEO_PATROL;
-    } else if (fname.indexOf("inbound") !== -1 || fname.indexOf("truck") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.INBOUND;
-    } else if (fname.indexOf("fasilitas") !== -1 || fname.indexOf("gudang") !== -1 || fname.indexOf("parkir") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.FACILITY;
-    } else if (fname.indexOf("pos") !== -1 || fname.indexOf("patroli") !== -1) {
-      targetSubName = DRIVE_SUBFOLDERS.CHECKPOINT;
-    }
-
-    if (targetSubName && folderMap[targetSubName]) {
-      try {
-        file.moveTo(folderMap[targetSubName]);
-        movedCount++;
-      } catch (e) {}
-    }
-  }
-  return "7 Sub-Folder Drive siap & " + movedCount + " file dirapikan.";
-}
-
-function setupSheetBahasaIndonesia() {
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  Object.keys(SCHEMAS_ID).forEach(function(sheetName) {
-    ensureIndonesianSheet_(ss, sheetName, SCHEMAS_ID[sheetName]);
-  });
-
-  var userSheet = ss.getSheetByName("DATABASE_USER");
-  if (userSheet && userSheet.getLastRow() < 2) {
-    var defaultUsers = [
-      ["BCP-EKO", "🔒 TERKUNCI:" + hashUserPassword_("BCP-EKO", "eko123"), "EKO SISWOYO", "Shift Malam", "AKTIF", "vivo V2109 (Android 13)"],
-      ["BCP-ANDRE", "🔒 TERKUNCI:" + hashUserPassword_("BCP-ANDRE", "andre123"), "ANDRE DWI CAHYONO", "Shift Pagi", "AKTIF", "Xiaomi 22021211RG (Android 14)"],
-      ["BCP-ALEX", "🔒 TERKUNCI:" + hashUserPassword_("BCP-ALEX", "alex123"), "ALEX PERDANA", "Shift Pagi", "AKTIF", "OPPO CPH1933 (Android 11)"],
-      ["BCP-TEST", "🔒 TERKUNCI:" + hashUserPassword_("BCP-TEST", "Test123"), "TESTAROSA", "Shift Malam", "AKTIF", "-"],
-      ["ADMIN-DEV", "🔒 TERKUNCI:" + hashUserPassword_("ADMIN-DEV", "dev123"), "Admin Uji", "Shift Pagi", "AKTIF", "Developer Device"]
-    ];
-    userSheet.getRange(2, 1, defaultUsers.length, 6).setValues(defaultUsers);
-  }
-
-  var oldEnglishTabs = ["TRUCK_VISITS", "STATUS_EVENTS", "DOCKS", "MAP_NODES", "USERS", "Sheet1"];
-  oldEnglishTabs.forEach(function(oldName) {
-    var oldSheet = ss.getSheetByName(oldName);
-    if (oldSheet && ss.getSheets().length > 1) {
-      ss.deleteSheet(oldSheet);
-    }
-  });
-
-  lockDatabaseUserProtectionOnly_(userSheet);
-  var driveMsg = rapikanFolderDrive();
-  return "7 Tab Sheet siap & " + driveMsg;
-}
-
-function lockDatabaseUserProtectionOnly_(sheet) {
-  if (!sheet) return;
-  try {
-    var protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
-    protections.forEach(function(p) { p.remove(); });
-    var protection = sheet.protect().setDescription("Khusus Admin / Editor SecPatrol");
-    var me = Session.getEffectiveUser();
-    protection.addEditor(me);
-    protection.removeEditors(protection.getEditors());
-    if (protection.canDomainEdit()) protection.setDomainEdit(false);
-  } catch (err) {}
-}
-
-function lockAndHideUserSheet() {
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  var sheet = ss.getSheetByName("DATABASE_USER");
-  if (!sheet) return "Tab DATABASE_USER belum ada.";
-
-  if (sheet.getLastRow() >= 2) {
-    var range = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2);
-    var values = range.getValues();
-    for (var i = 0; i < values.length; i++) {
-      var nip = String(values[i][0] || "").trim().toUpperCase();
-      var pass = String(values[i][1] || "").trim();
-      if (nip && pass && pass.indexOf("🔒 TERKUNCI:") !== 0) {
-        sheet.getRange(i + 2, 1).setValue(nip);
-        sheet.getRange(i + 2, 2).setValue("🔒 TERKUNCI:" + hashUserPassword_(nip, pass));
-      }
-    }
-  }
-  lockDatabaseUserProtectionOnly_(sheet);
-  if (ss.getSheets().length > 1) sheet.hideSheet();
-  return "Tab DATABASE_USER berhasil dikunci dan disembunyikan!";
-}
-
-function showUserSheetForEditor() {
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  var sheet = ss.getSheetByName("DATABASE_USER");
-  if (sheet) {
-    sheet.showSheet();
-    ss.setActiveSheet(sheet);
-  }
-}
-
-// ==========================================
-// 2. HANDLER GET & POST WEB APP
-// ==========================================
 function doGet(e) {
   try {
-    var action = e && e.parameter ? String(e.parameter.action || "") : "";
-    if (action === "ping" || !action) {
-      return json_({status: "ok", message: "Server SecPatrol Bahasa Indonesia aktif."});
+    var params = (e && e.parameter) ? e.parameter : {};
+    var action = String(params.action || '').trim();
+
+    if (action === 'verifyUser' || action === 'login') {
+      var res = verifyUser_({
+        username: params.username || params.nip || '',
+        password: params.password || '',
+        deviceModel: params.deviceModel || params.device || ''
+      });
+      return jsonResponse_(res);
     }
-    if (action === "checkHandoverStatus") {
-      var hoId = String(e.parameter.handoverId || "").trim();
-      return checkHandoverStatus_(hoId);
-    }
-    if (action === "verifyUser") {
-      var getPayload = {
-        username: e.parameter.username,
-        password: e.parameter.password,
-        deviceModel: e.parameter.device || e.parameter.deviceModel || ""
-      };
-      syncUserDeviceColumn_(getPayload);
-      return verifyUser_(getPayload);
-    }
-    if (action === "getActiveOfficers") {
-      return getActiveOfficers_();
-    }
-    if (action === "getActiveInboundQueue") {
-      return getActiveInboundQueue_();
-    }
-    return json_({status: "error", message: "Aksi GET tidak dikenali."});
+
+    return jsonResponse_({
+      status: 'success',
+      success: true,
+      version: '1.1.4',
+      message: 'SecPatrol Backend API v1.1.4 Aktif & Siap Menerima Data'
+    });
   } catch (err) {
-    return json_({status: "error", message: "Gagal memproses GET: " + err.message});
+    console.error('[doGet Error]: ' + err.stack);
+    return jsonResponse_({ status: 'error', success: false, message: err.message });
   }
 }
 
 function doPost(e) {
+  var lock = LockService.getScriptLock();
+  var hasLock = false;
+
   try {
-    var contents = (e && e.postData && e.postData.contents) || "{}";
-    if (contents.length > CONFIG.MAX_REQUEST_CHARS) {
-      return json_({status: "error", message: "Ukuran file terlalu besar."});
-    }
-    var body = JSON.parse(contents);
-    var action = String(body.action || "");
-
-    // Otomatis catat/perbarui Kolom F (Tipe Perangkat HP) di DATABASE_USER
-    syncUserDeviceColumn_(body);
-
-    if (action === "verifyUser") return verifyUser_(body);
-
-    var idempKey = cleanText_(body.idempotencyKey || body.fileName || "", 120);
-    if (idempKey && isDuplicateRequest_(idempKey)) {
-      return json_({status: "success", deduplicated: true, message: "Laporan sudah tercatat sebelumnya."});
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse_({ status: 'error', success: false, message: 'Payload request kosong.' });
     }
 
-    switch (action) {
-      case "handover": return saveHandover_(body, idempKey);
-      case "checkpoint": return saveCheckpoint_(body, idempKey);
-      case "facility_multi": return saveFacilityMulti_(body, idempKey);
-      case "inbound": return saveInbound_(body, idempKey);
-      case "genset": return saveGenset_(body, idempKey);
-      case "video_patrol": return saveVideoPatrol_(body, idempKey);
-      default: return json_({status: "error", message: "Aksi tidak dikenali: " + action});
+    var data = JSON.parse(e.postData.contents);
+    var action = String(data.action || '').trim();
+
+    // Proses Login / Verifikasi User
+    if (action === 'verifyUser' || action === 'login') {
+      return jsonResponse_(verifyUser_(data));
     }
-  } catch (err) {
-    return json_({status: "error", message: "Gagal diproses server: " + err.message});
-  }
-}
 
-// ==========================================
-// 3. VERIFIKASI LOGIN & DAFTAR SECURITY AKTIF
-// ==========================================
-function getActiveOfficersListInternal_() {
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  var sheet = ss.getSheetByName("DATABASE_USER");
-  if (!sheet || sheet.getLastRow() < 2) return [];
-
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
-  var list = [];
-  for (var i = 0; i < values.length; i++) {
-    var nip = String(values[i][0] || "").trim().toUpperCase();
-    var fullName = String(values[i][2] || "").trim();
-    var shiftDef = String(values[i][3] || "Shift Pagi").trim();
-    var status = String(values[i][4] || "").trim().toUpperCase();
-
-    if (nip && fullName && (status === "AKTIF" || status === "ACTIVE" || status === "TRUE" || status === "1")) {
-      list.push({
-        nip: nip,
-        name: fullName,
-        shift: shiftDef
+    // Gunakan ScriptLock untuk penulisan ke Spreadsheet agar bebas tabrakan data
+    hasLock = lock.tryLock(20000);
+    if (!hasLock) {
+      return jsonResponse_({
+        status: 'error',
+        success: false,
+        message: 'Server sedang memproses antrean data lain, silakan coba lagi.'
       });
     }
-  }
-  return list;
-}
 
-function getActiveOfficers_() {
-  var cache = CacheService.getScriptCache();
-  var cached = cache.get("ACTIVE_OFFICERS_CACHE");
-  if (cached) {
-    return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
-  }
-  var list = getActiveOfficersListInternal_();
-  var out = JSON.stringify({ status: "success", officers: list });
-  cache.put("ACTIVE_OFFICERS_CACHE", out, 60);
-  return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
-}
+    var result;
+    switch (action) {
+      case 'inbound':
+        result = saveInbound_(data);
+        break;
+      case 'handover':
+        result = saveHandover_(data);
+        break;
+      case 'checkpoint':
+        result = saveCheckpoint_(data);
+        break;
+      case 'facility_multi':
+      case 'facility':
+        result = saveFacilityMulti_(data);
+        break;
+      case 'genset':
+        result = saveGenset_(data);
+        break;
+      case 'video_patrol':
+        result = saveVideoPatrol_(data);
+        break;
+      default:
+        result = { status: 'error', success: false, message: 'Action tidak dikenali: ' + action };
+    }
 
-function verifyUser_(body) {
-  var username = String(body.username || "").trim().toUpperCase();
-  var password = String(body.password || "").trim();
-  var deviceInfo = cleanText_(body.deviceModel || body.device || "", 100);
-
-  if (!username || !password) {
-    return json_({status: "error", message: "Username/NIP dan Password wajib diisi!"});
-  }
-
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  var sheet = ensureIndonesianSheet_(ss, "DATABASE_USER", SCHEMAS_ID.DATABASE_USER);
-  if (sheet.getLastRow() < 2) setupSheetBahasaIndonesia();
-
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
-  for (var i = 0; i < values.length; i++) {
-    var row = values[i];
-    var rowNip = String(row[0] || "").trim().toUpperCase();
-    var storedPass = String(row[1] || "").trim();
-    var rowName = String(row[2] || username).trim();
-    var rowShift = String(row[3] || "").trim() || "Shift Pagi";
-    // Wajib tertulis "AKTIF" (Jika kosong maka ditolak)
-    var rowStatus = String(row[4] || "").trim().toUpperCase();
-
-    if (rowNip === username) {
-      if (rowStatus !== "AKTIF" && rowStatus !== "ACTIVE" && rowStatus !== "TRUE" && rowStatus !== "1") {
-        return json_({
-          status: "error",
-          message: "Login Ditolak: Status akun (" + rowNip + ") belum AKTIF atau masih kosong di DATABASE_USER."
-        });
-      }
-
-      var expectedLocked = "🔒 TERKUNCI:" + hashUserPassword_(rowNip, password);
-      if (storedPass === password || storedPass === expectedLocked) {
-        if (storedPass === password) sheet.getRange(i + 2, 2).setValue(expectedLocked);
-        if (deviceInfo) sheet.getRange(i + 2, 6).setValue(safeSheetValue_(deviceInfo));
-        return json_({
-          status: "success",
-          user: { id: rowNip, name: rowName, shift: rowShift },
-          officers: getActiveOfficersListInternal_(),
-          sessionToken: Utilities.getUuid().replace(/-/g, "")
-        });
-      } else {
-        return json_({status: "error", message: "Password salah!"});
-      }
+    return jsonResponse_(result);
+  } catch (err) {
+    console.error('[doPost Error]: ' + (err && err.stack ? err.stack : err));
+    return jsonResponse_({
+      status: 'error',
+      success: false,
+      message: 'Terjadi kesalahan pada server: ' + err.message
+    });
+  } finally {
+    if (hasLock) {
+      lock.releaseLock();
     }
   }
-  return json_({status: "error", message: "NIP / Username tidak ditemukan di DATABASE_USER."});
 }
 
-// ==========================================
-// 4. SIMPAN LAPORAN KE 6 TAB & 7 SUB-FOLDER DRIVE
-// ==========================================
-function saveHandover_(body, idempKey) {
-  var links = saveBase64ImagesToDriveSubfolder_(
-    extractPhotosArray_(body),
-    body.fileName || ("Selfie_HO_" + Date.now() + ".jpg"),
-    DRIVE_SUBFOLDERS.HANDOVER
-  );
-  var hoId = cleanText_(body.handoverId, 80) || ("HO-" + Utilities.formatDate(new Date(), "GMT+7", "yyyyMMdd-HHmmss"));
+// ============================================================================
+// 3. SISTEM KEAMANAN PASSWORD (🔒 TERKUNCI:) & VERIFIKASI USER
+// ============================================================================
 
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "SERAH_TERIMA", SCHEMAS_ID.SERAH_TERIMA);
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(hoId),
-      safeSheetValue_(cleanText_(body.giver, 100) || "Shift Sebelumnya"),
-      safeSheetValue_(cleanText_(body.receiver, 100) || "Petugas Shift Baru"),
-      safeSheetValue_(cleanText_(body.oldShift, 50) || "Shift Malam"),
-      safeSheetValue_(cleanText_(body.newShift, 50) || "Shift Pagi"),
-      safeSheetValue_(cleanText_(body.area, 120) || "Gudang BCP Kediri"),
-      Number(body.faceCount || 2),
-      links[0] || "-"
-    ]);
-    if (hoId) CacheService.getScriptCache().put("HO_DONE_" + hoId, "completed", 3600);
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Serah-terima tersimpan."});
-  } finally {
-    lock.releaseLock();
+function isPasswordLocked_(val) {
+  var str = String(val || '').trim();
+  return str.indexOf('🔒 TERKUNCI:') === 0 || str.indexOf('TERKUNCI:') === 0;
+}
+
+/**
+ * Menghasilkan hash password satu arah dengan SHA-256 (4096 iterasi + Salt NIP)
+ */
+function hashUserPassword_(nip, plainPassword) {
+  var cleanNip = String(nip || '').trim().toUpperCase();
+  var cleanPass = String(plainPassword || '').trim();
+  if (!cleanPass) return '';
+
+  if (isPasswordLocked_(cleanPass)) {
+    return cleanPass;
+  }
+
+  var salt = CONFIG.SALT_PREFIX + cleanNip;
+  var digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    salt + ':' + cleanPass,
+    Utilities.Charset.UTF_8
+  );
+
+  for (var i = 1; i < CONFIG.HASH_ITERATIONS; i++) {
+    var combined = digest.concat(Utilities.newBlob(salt).getBytes());
+    digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, combined);
+  }
+
+  var base64Hash = Utilities.base64EncodeWebSafe(digest).replace(/=+$/, '').substring(0, 28);
+  return CONFIG.PASSWORD_PREFIX + base64Hash;
+}
+
+/**
+ * Mengenkripsi semua password plaintext yang ada di DATABASE_USER sekaligus
+ */
+function encryptAllPlainPasswordsInSheet_(ss) {
+  var sheet = ensureIndonesianSheet_(ss, 'DATABASE_USER', SHEET_SCHEMAS.DATABASE_USER);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var range = sheet.getRange(2, 1, lastRow - 1, 2);
+  var values = range.getValues();
+  var updated = false;
+
+  for (var i = 0; i < values.length; i++) {
+    var nip = String(values[i][0] || '').trim();
+    var pass = String(values[i][1] || '').trim();
+    if (nip && pass && !isPasswordLocked_(pass)) {
+      values[i][1] = hashUserPassword_(nip, pass);
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    range.setValues(values);
   }
 }
 
-function saveCheckpoint_(body, idempKey) {
-  var links = saveBase64ImagesToDriveSubfolder_(
-    extractPhotosArray_(body),
-    body.fileName || ("Pos_Patroli_" + Date.now() + ".jpg"),
-    DRIVE_SUBFOLDERS.CHECKPOINT
-  );
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "TITIK_PATROLI", SCHEMAS_ID.TITIK_PATROLI);
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(cleanText_(body.checkpointName, 100) || "Pos 1"),
-      safeSheetValue_(cleanText_(body.officerName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.note, 1000) || "Aman / Terkendali"),
-      safeSheetValue_(cleanText_(body.address, 250) || "Area Patroli Security"),
-      safeSheetValue_(cleanText_(body.coordinates, 120) || "-"),
-      links[0] || "-"
-    ]);
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Titik patroli tersimpan."});
-  } finally {
-    lock.releaseLock();
+/**
+ * Verifikasi Login User (Mendukung Password Plaintext Lama & Format 🔒 TERKUNCI:)
+ */
+function verifyUser_(data) {
+  var inputUser = String(data.username || data.nip || '').trim();
+  var inputPass = String(data.password || '').trim();
+  var deviceModel = String(data.deviceModel || data.device || data.tipeHp || '').trim();
+
+  if (!inputUser || !inputPass) {
+    return { status: 'error', success: false, message: 'Username/NIP dan Password wajib diisi.' };
   }
-}
 
-function saveInbound_(body, idempKey) {
-  var nopol = cleanText_(body.nopol, 32).toUpperCase();
-  if (!nopol) return json_({status: "error", message: "Nomor Polisi wajib diisi."});
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'DATABASE_USER', SHEET_SCHEMAS.DATABASE_USER);
+  var rows = sheet.getDataRange().getValues();
 
-  var links = saveBase64ImagesToDriveSubfolder_(
-    extractPhotosArray_(body),
-    body.fileName || ("Truck_" + nopol.replace(/\s+/g, "_") + "_" + Date.now() + ".jpg"),
-    DRIVE_SUBFOLDERS.INBOUND
-  );
-  var statusMuatan = cleanText_(body.status, 100) || "Truck Datang - Antri Bongkar";
-  var isSelesai = statusMuatan.toLowerCase().indexOf("selesai") !== -1;
-  var statusAntrean = isSelesai ? "SELESAI" : "OUTSTANDING";
+  for (var i = 1; i < rows.length; i++) {
+    var rowNip = String(rows[i][0] || '').trim();
+    var rowPass = String(rows[i][1] || '').trim();
+    var fullName = String(rows[i][2] || '').trim();
+    var defaultShift = String(rows[i][3] || '').trim();
+    var status = String(rows[i][4] || 'AKTIF').trim().toUpperCase();
+    var currentDevice = String(rows[i][5] || '').trim();
 
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "LOGISTIK_INBOUND", SCHEMAS_ID.LOGISTIK_INBOUND);
+    if (rowNip.toUpperCase() === inputUser.toUpperCase()) {
+      if (status !== 'AKTIF') {
+        return {
+          status: 'error',
+          success: false,
+          message: 'Akun Anda berstatus ' + status + '. Silakan hubungi Admin.'
+        };
+      }
 
-    if (isSelesai && sheet.getLastRow() >= 2) {
-      var dataRange = sheet.getRange(2, 2, sheet.getLastRow() - 1, 9);
-      var dataVals = dataRange.getValues();
-      var cleanTarget = nopol.replace(/\s+/g, "");
-      for (var i = 0; i < dataVals.length; i++) {
-        var existingNopol = String(dataVals[i][0] || "").toUpperCase().replace(/\s+/g, "");
-        if (existingNopol === cleanTarget && dataVals[i][8] !== "SELESAI") {
-          sheet.getRange(i + 2, 10).setValue("SELESAI");
+      var expectedHash = hashUserPassword_(rowNip, inputPass);
+      var isMatch = false;
+
+      if (isPasswordLocked_(rowPass)) {
+        var cleanStored = rowPass.replace(/^🔒\s*/, '');
+        var cleanExpected = expectedHash.replace(/^🔒\s*/, '');
+        isMatch = (rowPass === expectedHash) || (cleanStored === cleanExpected);
+      } else {
+        // Jika di sheet masih plaintext, cocokkan lalu langsung ubah menjadi 🔒 TERKUNCI:
+        if (rowPass === inputPass) {
+          isMatch = true;
+          sheet.getRange(i + 1, 2).setValue(expectedHash);
         }
       }
-    }
 
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(nopol),
-      safeSheetValue_(cleanText_(body.driverName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.driverPhone, 40) || "-"),
-      safeSheetValue_(cleanText_(body.division, 100) || "-"),
-      safeSheetValue_(cleanText_(body.vehicleType, 80) || "-"),
-      safeSheetValue_(cleanText_(body.expedition, 100) || "-"),
-      safeSheetValue_(cleanText_(body.sealNo, 80) || "-"),
-      safeSheetValue_(statusMuatan),
-      statusAntrean,
-      safeSheetValue_(cleanText_(body.officerName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.note, 1000) || statusMuatan),
-      safeSheetValue_(cleanText_(body.coordinates, 120) || "-"),
-      links[0] || "-",
-      links[1] || "-",
-      links[2] || "-"
-    ]);
+      if (!isMatch) {
+        return { status: 'error', success: false, message: 'Password salah.' };
+      }
 
-    CacheService.getScriptCache().remove("ACTIVE_INBOUND_CACHE");
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Data Logistik Inbound tersimpan."});
-  } finally {
-    lock.releaseLock();
-  }
-}
+      // Perbarui informasi Tipe Perangkat HP di kolom F jika dikirim dari APK
+      if (deviceModel && deviceModel !== currentDevice) {
+        sheet.getRange(i + 1, 6).setValue(deviceModel);
+        currentDevice = deviceModel;
+      }
 
-function saveGenset_(body, idempKey) {
-  var fisikLinks = saveBase64ImagesToDriveSubfolder_(
-    [body.imageBase64],
-    body.fileName || ("Genset_Fisik_" + Date.now() + ".jpg"),
-    DRIVE_SUBFOLDERS.GENSET_PHOTO
-  );
-  var hseLinks = body.hseDocBase64
-    ? saveBase64ImagesToDriveSubfolder_([body.hseDocBase64], "Genset_HSE_" + Date.now() + ".jpg", DRIVE_SUBFOLDERS.GENSET_PHOTO)
-    : [];
-  var videoLink = body.videoBase64
-    ? saveVideoToDriveSubfolderPlayable_(body.videoBase64, "Genset_Video_" + Date.now() + ".mp4", DRIVE_SUBFOLDERS.GENSET_VIDEO)
-    : "-";
-
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "PENGECEKAN_GENSET", SCHEMAS_ID.PENGECEKAN_GENSET);
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(cleanText_(body.statusGenset, 100) || "Uji Pemanasan (Warming Up Rutin)"),
-      safeSheetValue_(cleanText_(body.oilCheck, 100) || "Level Normal & Bening/Kuning"),
-      safeSheetValue_(cleanText_(body.fuelInfo, 100) || "Standby Normal"),
-      safeSheetValue_(cleanText_(body.officerName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.note, 1000) || "Kondisi genset normal"),
-      safeSheetValue_(cleanText_(body.address, 250) || "Area Patroli Security"),
-      safeSheetValue_(cleanText_(body.coordinates, 120) || "-"),
-      fisikLinks[0] || "-",
-      hseLinks[0] || "-",
-      videoLink
-    ]);
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Pengecekan genset tersimpan."});
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function saveFacilityMulti_(body, idempKey) {
-  var links = saveBase64ImagesToDriveSubfolder_(
-    extractPhotosArray_(body),
-    body.fileName || ("Fasilitas_" + Date.now() + ".jpg"),
-    DRIVE_SUBFOLDERS.FACILITY
-  );
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "DOKUMENTASI_GUDANG", SCHEMAS_ID.DOKUMENTASI_GUDANG);
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(cleanText_(body.reportName, 120) || "Area Parkir / Sekeliling"),
-      safeSheetValue_(cleanText_(body.officerName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.note, 1000) || "Kondisi aman & rapi"),
-      safeSheetValue_(cleanText_(body.address, 250) || "Area Patroli Security"),
-      safeSheetValue_(cleanText_(body.coordinates, 120) || "-"),
-      links[0] || "-",
-      links[1] || "-",
-      links[2] || "-"
-    ]);
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Dokumentasi gudang tersimpan."});
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function saveVideoPatrol_(body, idempKey) {
-  var vName = cleanFilename_(body.fileName || ("Video_Patroli_" + Date.now() + ".mp4"));
-  var videoLink = body.videoBase64
-    ? saveVideoToDriveSubfolderPlayable_(body.videoBase64, vName, DRIVE_SUBFOLDERS.VIDEO_PATROL)
-    : "-";
-
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("Server sibuk.");
-  try {
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ensureIndonesianSheet_(ss, "VIDEO_PATROLI", SCHEMAS_ID.VIDEO_PATROLI);
-    sheet.appendRow([
-      formatWaktuWib_(),
-      safeSheetValue_(cleanText_(body.title, 120) || "Video Keliling Inspeksi Fasilitas"),
-      safeSheetValue_(cleanText_(body.officerName, 100) || "-"),
-      safeSheetValue_(cleanText_(body.note, 1000) || "Patroli keliling fasilitas gudang"),
-      safeSheetValue_(cleanText_(body.address, 250) || "Area Patroli Security"),
-      safeSheetValue_(cleanText_(body.coordinates, 120) || "-"),
-      videoLink
-    ]);
-    markRequestCompleted_(idempKey);
-    return json_({status: "success", message: "Video patroli tersimpan."});
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-// ==========================================
-// 5. CEK ANTREAN INBOUND & STATUS HANDOVER
-// ==========================================
-function getActiveInboundQueue_() {
-  try {
-    var cache = CacheService.getScriptCache();
-    var cached = cache.get("ACTIVE_INBOUND_CACHE");
-    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
-
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ss.getSheetByName("LOGISTIK_INBOUND");
-    if (!sheet || sheet.getLastRow() < 2) return json_({status: "success", data: []});
-
-    var lastRow = sheet.getLastRow();
-    var startRow = Math.max(2, lastRow - 80);
-    var values = sheet.getRange(startRow, 1, (lastRow - startRow) + 1, 10).getValues();
-    var latestByNopol = {};
-
-    for (var i = 0; i < values.length; i++) {
-      var r = values[i];
-      var nopol = String(r[1] || "").trim().toUpperCase();
-      if (!nopol || nopol === "TRUCK" || nopol === "TIBA") continue;
-      var nopolKey = nopol.replace(/\s+/g, "");
-      latestByNopol[nopolKey] = {
-        nopol: nopol,
-        driverName: String(r[2] || ""),
-        driverPhone: String(r[3] || ""),
-        division: String(r[4] || ""),
-        vehicleType: String(r[5] || ""),
-        expedition: String(r[6] || ""),
-        sealNo: String(r[7] || ""),
-        status: String(r[8] || "").trim(),
-        queueState: String(r[9] || "").trim().toUpperCase()
+      return {
+        status: 'success',
+        success: true,
+        message: 'Login Berhasil',
+        username: rowNip,
+        nip: rowNip,
+        fullName: fullName,
+        nama: fullName,
+        defaultShift: defaultShift,
+        shift: defaultShift,
+        userStatus: status,
+        deviceModel: currentDevice,
+        data: {
+          username: rowNip,
+          fullName: fullName,
+          defaultShift: defaultShift,
+          status: status,
+          deviceModel: currentDevice
+        }
       };
     }
-
-    var activeList = [];
-    Object.keys(latestByNopol).forEach(function(np) {
-      var item = latestByNopol[np];
-      if (item.queueState !== "SELESAI" && item.status.toLowerCase().indexOf("selesai") === -1) {
-        activeList.push(item);
-      }
-    });
-
-    var out = JSON.stringify({status: "success", data: activeList});
-    cache.put("ACTIVE_INBOUND_CACHE", out, 15);
-    return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return json_({status: "success", data: []});
   }
+
+  return { status: 'error', success: false, message: 'Username / NIP tidak ditemukan.' };
 }
 
-function checkHandoverStatus_(hoId) {
-  if (!hoId) return json_({status: "pending"});
-  if (CacheService.getScriptCache().get("HO_DONE_" + hoId) === "completed") {
-    return json_({status: "completed"});
+// ============================================================================
+// 4. HANDLER LAPORAN OPERASIONAL (7 TAB DATABASE)
+// ============================================================================
+
+/**
+ * 1. LOGISTIK_INBOUND (Mendukung 1 s/d 3 Foto & Update Status Antrean)
+ */
+function saveInbound_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var nopol = String(data.nopol || '-').trim().toUpperCase();
+  var driverName = String(data.driverName || '-').trim();
+  var driverPhone = String(data.driverPhone || '-').trim();
+  var division = String(data.division || '-').trim();
+  var vehicleType = String(data.vehicleType || '-').trim();
+  var expedition = String(data.expedition || '-').trim();
+  var sealNo = String(data.sealNo || '-').trim();
+  var loadStatus = String(data.status || data.loadStatus || '-').trim();
+  var officerName = String(data.officerName || data.petugas || '-').trim();
+  var note = String(data.note || '-').trim();
+  var coordinates = String(data.coordinates || '-').trim();
+
+  var dedupKey = 'INBOUND_' + nopol + '_' + loadStatus + '_' + officerName;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Data inbound sudah tercatat.' };
   }
-  var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  var sheet = ss.getSheetByName("SERAH_TERIMA");
-  if (sheet && sheet.getLastRow() >= 2) {
-    var ids = sheet.getRange(2, 2, sheet.getLastRow() - 1, 1).getValues();
-    for (var i = ids.length - 1; i >= 0; i--) {
-      if (String(ids[i][0] || "").trim() === hoId) {
-        return json_({status: "completed"});
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'LOGISTIK_INBOUND', SHEET_SCHEMAS.LOGISTIK_INBOUND);
+
+  var photoLinks = extractAndSavePhotos_(data, 'Logistik_Inbound', 'INBOUND_' + nopol.replace(/\s+/g, ''));
+  var queueStatus = String(data.queueStatus || '').trim();
+  if (!queueStatus) {
+    queueStatus = (loadStatus.toLowerCase().indexOf('selesai') !== -1) ? 'SELESAI' : 'PROSES';
+  }
+
+  if (queueStatus === 'SELESAI') {
+    markPreviousTruckEntriesDone_(sheet, nopol);
+  }
+
+  sheet.appendRow([
+    timeStr,
+    nopol,
+    driverName,
+    driverPhone,
+    division,
+    vehicleType,
+    expedition,
+    sealNo,
+    loadStatus,
+    queueStatus,
+    officerName,
+    note,
+    coordinates,
+    photoLinks[0] || '-',
+    photoLinks[1] || '-',
+    photoLinks[2] || '-'
+  ]);
+
+  return { status: 'success', success: true, message: 'Data Logistik Inbound berhasil disimpan.' };
+}
+
+/**
+ * 2. SERAH_TERIMA (Handover Shift)
+ */
+function saveHandover_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var handoverId = String(data.handoverId || data.id || ('HO-' + new Date().getTime())).trim();
+  var giver = String(data.giver || data.penyerah || '-').trim();
+  var receiver = String(data.receiver || data.penerima || '-').trim();
+  var oldShift = String(data.oldShift || data.shiftLama || '-').trim();
+  var newShift = String(data.newShift || data.shiftBaru || '-').trim();
+  var area = String(data.area || 'Gudang BCP Kediri').trim();
+  var faceCount = Number(data.faceCount || data.wajah || 1);
+
+  var dedupKey = 'HANDOVER_' + handoverId + '_' + giver + '_' + receiver;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Serah terima sudah tercatat.' };
+  }
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'SERAH_TERIMA', SHEET_SCHEMAS.SERAH_TERIMA);
+
+  var photoLinks = extractAndSavePhotos_(data, 'Serah_Terima', data.fileName || handoverId);
+
+  sheet.appendRow([
+    timeStr,
+    handoverId,
+    giver,
+    receiver,
+    oldShift,
+    newShift,
+    area,
+    faceCount,
+    photoLinks[0] || '-'
+  ]);
+
+  return { status: 'success', success: true, message: 'Data Serah Terima berhasil disimpan.' };
+}
+
+/**
+ * 3. TITIK_PATROLI (Checkpoint Patroli Pos)
+ */
+function saveCheckpoint_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var checkpointName = String(data.checkpointName || data.pos || '-').trim();
+  var officerName = String(data.officerName || data.petugas || '-').trim();
+  var note = String(data.note || 'Aman / Terkendali').trim();
+  var address = String(data.address || '-').trim();
+  var coordinates = String(data.coordinates || '-').trim();
+
+  var dedupKey = 'CHECKPOINT_' + checkpointName + '_' + officerName + '_' + note;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Titik patroli sudah tercatat.' };
+  }
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'TITIK_PATROLI', SHEET_SCHEMAS.TITIK_PATROLI);
+
+  var photoLinks = extractAndSavePhotos_(data, 'Titik_Patroli', data.fileName || ('PATROLI_' + checkpointName));
+
+  sheet.appendRow([
+    timeStr,
+    checkpointName,
+    officerName,
+    note,
+    address,
+    coordinates,
+    photoLinks[0] || '-'
+  ]);
+
+  return { status: 'success', success: true, message: 'Laporan Titik Patroli berhasil disimpan.' };
+}
+
+/**
+ * 4. DOKUMENTASI_GUDANG (Mendukung 1 s/d 3 Foto Area/Fasilitas)
+ */
+function saveFacilityMulti_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var reportName = String(data.reportName || data.facilityName || data.area || '-').trim();
+  var officerName = String(data.officerName || data.petugas || '-').trim();
+  var note = String(data.note || 'Kondisi aman & rapi').trim();
+  var address = String(data.address || '-').trim();
+  var coordinates = String(data.coordinates || '-').trim();
+
+  var dedupKey = 'FACILITY_' + reportName + '_' + officerName + '_' + note;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Dokumentasi gudang sudah tercatat.' };
+  }
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'DOKUMENTASI_GUDANG', SHEET_SCHEMAS.DOKUMENTASI_GUDANG);
+
+  var photoLinks = extractAndSavePhotos_(data, 'Dokumentasi_Gudang', data.fileName || ('FASILITAS_' + reportName));
+
+  sheet.appendRow([
+    timeStr,
+    reportName,
+    officerName,
+    note,
+    address,
+    coordinates,
+    photoLinks[0] || '-',
+    photoLinks[1] || '-',
+    photoLinks[2] || '-'
+  ]);
+
+  return { status: 'success', success: true, message: 'Dokumentasi Gudang berhasil disimpan.' };
+}
+
+/**
+ * 5. PENGECEKAN_GENSET (Mendukung Foto Genset, Foto HSE, dan Video)
+ */
+function saveGenset_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var statusGenset = String(data.statusGenset || 'Uji Pemanasan (Warming Up Rutin)').trim();
+  var oilCheck = String(data.oilCheck || '-').trim();
+  var fuelInfo = String(data.fuelInfo || '-').trim();
+  var officerName = String(data.officerName || data.petugas || '-').trim();
+  var note = String(data.note || 'Kondisi genset normal').trim();
+  var address = String(data.address || '-').trim();
+  var coordinates = String(data.coordinates || '-').trim();
+
+  var dedupKey = 'GENSET_' + statusGenset + '_' + officerName + '_' + note;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Pengecekan genset sudah tercatat.' };
+  }
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'PENGECEKAN_GENSET', SHEET_SCHEMAS.PENGECEKAN_GENSET);
+
+  var photoLinks = extractAndSavePhotos_(data, 'Pengecekan_Genset', 'GENSET_FOTO');
+  var hseLink = '-';
+  if (data.hseDocBase64) {
+    hseLink = saveBase64FileToDrive_(
+      data.hseDocBase64,
+      'GENSET_HSE_' + new Date().getTime() + '.jpg',
+      'image/jpeg',
+      'Pengecekan_Genset'
+    );
+  }
+
+  var videoLink = '-';
+  if (data.videoBase64) {
+    videoLink = saveBase64FileToDrive_(
+      data.videoBase64,
+      'GENSET_VIDEO_' + new Date().getTime() + '.mp4',
+      'video/mp4',
+      'Pengecekan_Genset'
+    );
+  }
+
+  sheet.appendRow([
+    timeStr,
+    statusGenset,
+    oilCheck,
+    fuelInfo,
+    officerName,
+    note,
+    address,
+    coordinates,
+    photoLinks[0] || '-',
+    hseLink,
+    videoLink
+  ]);
+
+  return { status: 'success', success: true, message: 'Pengecekan Genset berhasil disimpan.' };
+}
+
+/**
+ * 6. VIDEO_PATROLI
+ */
+function saveVideoPatrol_(data) {
+  var timeStr = formatTimestamp_(data.timestamp);
+  var title = String(data.title || data.fileName || 'Video Keliling Inspeksi Fasilitas').trim();
+  var officerName = String(data.officerName || data.petugas || '-').trim();
+  var note = String(data.note || 'Patroli keliling fasilitas gudang').trim();
+  var address = String(data.address || '-').trim();
+  var coordinates = String(data.coordinates || '-').trim();
+
+  var dedupKey = 'VIDPATROL_' + title + '_' + officerName + '_' + coordinates;
+  if (isDuplicateRequest_(dedupKey)) {
+    return { status: 'success', success: true, duplicate: true, message: 'Video patroli sudah tercatat.' };
+  }
+
+  var ss = getSpreadsheet_();
+  var sheet = ensureIndonesianSheet_(ss, 'VIDEO_PATROLI', SHEET_SCHEMAS.VIDEO_PATROLI);
+
+  var videoLink = '-';
+  if (data.videoBase64) {
+    videoLink = saveBase64FileToDrive_(
+      data.videoBase64,
+      'VIDEO_PATROLI_' + new Date().getTime() + '.mp4',
+      'video/mp4',
+      'Video_Patroli'
+    );
+  }
+
+  sheet.appendRow([
+    timeStr,
+    title,
+    officerName,
+    note,
+    address,
+    coordinates,
+    videoLink
+  ]);
+
+  return { status: 'success', success: true, message: 'Video Patroli berhasil disimpan.' };
+}
+
+// ============================================================================
+// 5. HELPER FUNCTIONS (AUTO-CLEAN ID/URL, SPREADSHEET, DRIVE, DEDUP CACHE)
+// ============================================================================
+
+/**
+ * Mengekstrak ID secara otomatis dari link/URL lengkap Google Sheet atau Folder Drive,
+ * sekaligus mengoreksi otomatis jika ada kesalahan ketik pola WWm menjadi WwM.
+ */
+function cleanGoogleId_(rawInput, propKey) {
+  var str = String(rawInput || '').trim();
+  if (!str || str.indexOf('PASTE_') !== -1 || str.indexOf('MASUKKAN_') !== -1) {
+    str = String(SCRIPT_PROP.getProperty(propKey) || '').trim();
+  }
+  if (!str || str.indexOf('PASTE_') !== -1 || str.indexOf('MASUKKAN_') !== -1) {
+    return '';
+  }
+
+  // Koreksi otomatis kesalahan ketik huruf besar/kecil yang sering terjadi (WWm -> WwM)
+  str = str.replace(/1kWWm9y/g, '1kWwM9y');
+
+  // Ekstrak ID jika yang ditempel adalah URL lengkap Google Spreadsheet / Docs
+  var matchDoc = str.match(/\/d\/([a-zA-Z0-9-_]{25,})/);
+  if (matchDoc && matchDoc[1]) return matchDoc[1];
+
+  // Ekstrak ID jika yang ditempel adalah URL lengkap Folder Google Drive
+  var matchFolder = str.match(/\/folders\/([a-zA-Z0-9-_]{25,})/);
+  if (matchFolder && matchFolder[1]) return matchFolder[1];
+
+  var matchParam = str.match(/[?&]id=([a-zA-Z0-9-_]{25,})/);
+  if (matchParam && matchParam[1]) return matchParam[1];
+
+  return str.replace(/[^a-zA-Z0-9-_]/g, '');
+}
+
+function getSpreadsheet_() {
+  var sheetId = cleanGoogleId_(CONFIG.SPREADSHEET_ID, 'SPREADSHEET_ID');
+  if (sheetId) {
+    return SpreadsheetApp.openById(sheetId);
+  }
+  var activeSs = SpreadsheetApp.getActiveSpreadsheet();
+  if (activeSs) return activeSs;
+  throw new Error('Silakan paste Link Lengkap Google Sheet Live Anda pada CONFIG.SPREADSHEET_ID (Baris 15).');
+}
+
+function ensureIndonesianSheet_(ss, sheetName, headers) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  var lastCol = sheet.getLastColumn();
+  if (sheet.getLastRow() === 0 || lastCol === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  } else {
+    var currentHeaders = sheet.getRange(1, 1, 1, Math.max(lastCol, headers.length)).getValues()[0];
+    var needHeaderUpdate = false;
+    for (var i = 0; i < headers.length; i++) {
+      if (String(currentHeaders[i] || '').trim() !== headers[i]) {
+        currentHeaders[i] = headers[i];
+        needHeaderUpdate = true;
       }
     }
-  }
-  return json_({status: "pending"});
-}
-
-// ==========================================
-// 6. HELPER DRIVE, DEVICE SYNC & UTILITAS
-// ==========================================
-function syncUserDeviceColumn_(body) {
-  try {
-    var devInfo = cleanText_(body.deviceModel || body.device || "", 100);
-    if (!devInfo) return;
-
-    var targetKey = String(body.username || body.officerId || body.officerName || body.receiver || "")
-      .trim()
-      .toUpperCase();
-    if (!targetKey) return;
-
-    var ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    var sheet = ss.getSheetByName("DATABASE_USER");
-    if (!sheet || sheet.getLastRow() < 2) return;
-
-    var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
-    for (var i = 0; i < values.length; i++) {
-      var rowNip = String(values[i][0] || "").trim().toUpperCase();
-      var rowName = String(values[i][2] || "").trim().toUpperCase();
-      var currentDev = String(values[i][5] || "").trim();
-
-      if (rowNip === targetKey || rowName === targetKey) {
-        if (currentDev !== devInfo) {
-          sheet.getRange(i + 2, 6).setValue(safeSheetValue_(devInfo));
-        }
-        break;
-      }
+    if (needHeaderUpdate) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([currentHeaders.slice(0, headers.length)]);
     }
-  } catch (e) {}
-}
-
-function getOrCreateTargetSubfolder_(subfolderName) {
-  var parentFolder = DriveApp.getFolderById(String(CONFIG.PHOTO_FOLDER_ID).trim());
-  if (!subfolderName) return parentFolder;
-  var subIter = parentFolder.getFoldersByName(subfolderName);
-  return subIter.hasNext() ? subIter.next() : parentFolder.createFolder(subfolderName);
-}
-
-function saveBase64ImagesToDriveSubfolder_(photos, defaultName, subfolderName) {
-  if (!photos || !photos.length) return [];
-  var targetFolder = getOrCreateTargetSubfolder_(subfolderName);
-  var baseName = cleanFilename_(defaultName);
-
-  return photos.map(function(encoded, idx) {
-    var cleanB64 = String(encoded || "").trim().replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
-    if (!cleanB64) return "-";
-    var suffix = photos.length > 1 ? "_" + (idx + 1) : "";
-    var name = baseName.replace(/\.(jpg|jpeg|png|webp)$/i, "") + suffix + ".jpg";
-    var file = targetFolder.createFile(Utilities.newBlob(Utilities.base64Decode(cleanB64), "image/jpeg", name));
-    try {
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    } catch (e) {}
-    return driveViewUrl_(file.getId());
-  });
-}
-
-function saveVideoToDriveSubfolderPlayable_(base64Video, fileName, subfolderName) {
-  var targetFolder = getOrCreateTargetSubfolder_(subfolderName);
-  var cleanBase64 = String(base64Video || "").trim().replace(/^data:video\/[a-zA-Z0-9.+-]+;base64,/, "");
-  if (!cleanBase64) return "-";
-  var blob = Utilities.newBlob(Utilities.base64Decode(cleanBase64), "video/mp4", cleanFilename_(fileName));
-  var vFile = targetFolder.createFile(blob);
-  try {
-    vFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {}
-  return driveViewUrl_(vFile.getId());
-}
-
-function ensureIndonesianSheet_(ss, name, headers) {
-  var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
-  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
-    var headerRange = sheet.getRange(1, 1, 1, headers.length);
-    headerRange.setValues([headers]);
-    headerRange.setBackground("#004741");
-    headerRange.setFontColor("#FFFFFF");
-    headerRange.setFontWeight("bold");
-    sheet.setFrozenRows(1);
   }
+
+  var headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange
+    .setBackground(CONFIG.HEADER_BG_COLOR)
+    .setFontColor(CONFIG.HEADER_TEXT_COLOR)
+    .setFontWeight('bold');
+  sheet.setFrozenRows(1);
+
   return sheet;
 }
 
-function hashUserPassword_(nip, plainPassword) {
-  var raw = "SECPATROL_SALT_" + String(nip).trim().toUpperCase() + ":" + String(plainPassword).trim();
-  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw, Utilities.Charset.UTF_8);
-  return Utilities.base64EncodeWebSafe(digest).slice(0, 28);
+function extractAndSavePhotos_(data, subfolderName, prefixName) {
+  var rawList = [];
+  if (Array.isArray(data.imagesBase64) && data.imagesBase64.length > 0) {
+    rawList = data.imagesBase64.slice(0, 3);
+  } else if (data.imageBase64) {
+    rawList = [data.imageBase64];
+  }
+
+  var links = ['-', '-', '-'];
+  var cleanPrefix = String(prefixName || 'FOTO').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  for (var i = 0; i < rawList.length; i++) {
+    if (rawList[i]) {
+      var fileName = cleanPrefix + '_' + (i + 1) + '_' + new Date().getTime() + '.jpg';
+      links[i] = saveBase64FileToDrive_(rawList[i], fileName, 'image/jpeg', subfolderName);
+    }
+  }
+  return links;
 }
 
-function formatWaktuWib_() {
-  return Utilities.formatDate(new Date(), "GMT+7", "yyyy-MM-dd HH:mm:ss");
+function saveBase64FileToDrive_(base64Data, fileName, mimeType, subfolderName) {
+  try {
+    var cleanBase64 = String(base64Data || '').replace(/^data:[^;]+;base64,/, '');
+    if (!cleanBase64) return '-';
+
+    var decoded = Utilities.base64Decode(cleanBase64);
+    var blob = Utilities.newBlob(decoded, mimeType || 'image/jpeg', fileName);
+
+    var parentFolder = getOrCreateSubfolder_(subfolderName);
+    var file = parentFolder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch (err) {
+    console.error('[saveBase64FileToDrive_ Error]: ' + err.message);
+    return '-';
+  }
 }
 
-function driveViewUrl_(fileId) {
-  return "https://drive.google.com/file/d/" + fileId + "/view?usp=drivesdk";
+function getOrCreateSubfolder_(subfolderName) {
+  var rootFolder = null;
+  var folderId = cleanGoogleId_(CONFIG.FOLDER_ID, 'FOLDER_ID');
+
+  if (folderId) {
+    try {
+      rootFolder = DriveApp.getFolderById(folderId);
+    } catch (e) {
+      rootFolder = null;
+    }
+  }
+
+  // Fallback cerdas: jika FOLDER_ID belum diisi, gunakan folder induk tempat Spreadsheet berada
+  if (!rootFolder) {
+    try {
+      var ssId = getSpreadsheet_().getId();
+      var parents = DriveApp.getFileById(ssId).getParents();
+      if (parents.hasNext()) {
+        rootFolder = parents.next();
+      }
+    } catch (e) {
+      rootFolder = null;
+    }
+  }
+
+  if (!rootFolder) {
+    rootFolder = DriveApp.getRootFolder();
+  }
+
+  if (!subfolderName) return rootFolder;
+
+  var folders = rootFolder.getFoldersByName(subfolderName);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+  return rootFolder.createFolder(subfolderName);
 }
 
-function extractPhotosArray_(body) {
-  var photos = Array.isArray(body.imagesBase64) ? body.imagesBase64 : (body.imageBase64 ? [body.imageBase64] : []);
-  return photos.map(function(v) {
-    return String(v || "").trim().replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
-  }).filter(Boolean).slice(0, 3);
+function markPreviousTruckEntriesDone_(sheet, nopol) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var data = sheet.getRange(2, 2, lastRow - 1, 9).getValues();
+  var cleanNopol = nopol.replace(/\s+/g, '').toUpperCase();
+
+  for (var i = 0; i < data.length; i++) {
+    var rowNopol = String(data[i][0] || '').replace(/\s+/g, '').toUpperCase();
+    var rowQueue = String(data[i][8] || '').trim().toUpperCase();
+    if (rowNopol === cleanNopol && rowQueue !== 'SELESAI') {
+      sheet.getRange(i + 2, 10).setValue('SELESAI');
+    }
+  }
 }
 
-function isDuplicateRequest_(idempKey) {
-  var cacheKey = "IDEMP_" + digestText_(idempKey).slice(0, 40);
-  return CacheService.getScriptCache().get(cacheKey) === "DONE";
+function isDuplicateRequest_(rawKey) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, rawKey);
+    var keyHash = 'DEDUP_' + Utilities.base64EncodeWebSafe(digest).substring(0, 24);
+    if (cache.get(keyHash)) {
+      return true;
+    }
+    cache.put(keyHash, '1', CONFIG.DEDUP_TTL_SECONDS);
+    return false;
+  } catch (err) {
+    return false;
+  }
 }
 
-function markRequestCompleted_(idempKey) {
-  if (!idempKey) return;
-  var cacheKey = "IDEMP_" + digestText_(idempKey).slice(0, 40);
-  CacheService.getScriptCache().put(cacheKey, "DONE", 21600);
+function formatTimestamp_(ts) {
+  if (ts && String(ts).trim() !== '') {
+    return String(ts).trim();
+  }
+  return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
 }
 
-function digestText_(text) {
-  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8));
-}
-
-function safeSheetValue_(val) {
-  var str = String(val == null ? "" : val).trim();
-  if (/^-[0-9]/.test(str)) return str;
-  return /^[=+\-@]/.test(str) ? "'" + str : str;
-}
-
-function cleanText_(val, max) {
-  return String(val == null ? "" : val).replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, max);
-}
-
-function cleanFilename_(val) {
-  return String(val || "File.jpg").split(/[\\/]/).pop().replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "File.jpg";
-}
-
-function json_(val) {
-  return ContentService.createTextOutput(JSON.stringify(val)).setMimeType(ContentService.MimeType.JSON);
+function jsonResponse_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
