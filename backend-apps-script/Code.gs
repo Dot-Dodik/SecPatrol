@@ -14,10 +14,10 @@ var SCRIPT_PROP = PropertiesService.getScriptProperties();
 
 var CONFIG = {
   // CUKUP PASTE LINK/URL LENGKAP GOOGLE SHEET LIVE ANDA DI DALAM TANDA KUTIP INI:
-  SPREADSHEET_ID: '1pu7vAQTzSppiPtFqDYIxebcKXk1kWwM9yxnQrWOCaS0',
+  SPREADSHEET_ID: 'link_gsheet',
 
   // OPSIONAL: PASTE LINK/URL FOLDER GOOGLE DRIVE LIVE (Jika dikosongkan, otomatis memakai folder tempat GSheet berada):
-  FOLDER_ID: '1uhHx-r31TW2ms0d8Ion4oJ5l4MEw_CG1',
+  FOLDER_ID: 'link_folder_photo',
 
   PASSWORD_PREFIX: '🔒 TERKUNCI:',
   SALT_PREFIX: 'SECPATROL_SALT_',
